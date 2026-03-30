@@ -1,0 +1,33 @@
+# env files
+.env
+.env.local
+.env.*.local
+
+# archives
+*.tar
+*.tar.gz
+*.tgz
+*.zip
+
+# logs
+*.log
+logs/
+tmp/
+
+# editor / os
+*~
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# python cache
+__pycache__/
+*.pyc
+
+# shell / temp output
+*.out
+*.bak
+
+# git keep runtime clean
+db_data/

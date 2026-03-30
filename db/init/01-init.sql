@@ -1,0 +1,7 @@
+CREATE TABLE IF NOT EXISTS app_status (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  message VARCHAR(255) NOT NULL,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+INSERT INTO app_status (message) VALUES ('linuxday2026 test record');
