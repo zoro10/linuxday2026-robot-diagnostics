@@ -31,3 +31,6 @@ __pycache__/
 
 # git keep runtime clean
 db_data/
+
+# Backup locali Gazebo
+*.pre-*.sdf
