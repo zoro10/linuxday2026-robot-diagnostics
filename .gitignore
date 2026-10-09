@@ -34,3 +34,6 @@ db_data/
 
 # Backup locali Gazebo
 *.pre-*.sdf
+
+# Dati diagnostici runtime
+runtime/
