@@ -14,6 +14,7 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan
 from pulse1_linux_metrics import LinuxMetrics
 from pulse1_health_score import evaluate
+from pulse1_health_v2 import evaluate as evaluate_v2
 from pulse1_web_check import check_web
 
 
@@ -143,6 +144,7 @@ class Pulse1Collector(Node):
             self.web_last_check = now
         payload['web'] = self.web_state
         payload['health'] = evaluate(payload)
+        payload['diagnostics'] = evaluate_v2(payload)
 
         temporary = self.output.with_suffix('.json.tmp')
         temporary.write_text(json.dumps(payload, indent=2) + '\n')

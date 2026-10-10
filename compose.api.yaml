@@ -1,0 +1,13 @@
+services:
+  api:
+    image: pulse1-diagnostic-api:dev
+    build:
+      context: .
+      dockerfile: services/diagnostic-api/Dockerfile
+    container_name: pulse1-diagnostic-api
+    restart: unless-stopped
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    volumes:
+      - ./runtime:/runtime:ro
