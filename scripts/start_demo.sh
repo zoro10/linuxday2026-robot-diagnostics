@@ -13,7 +13,7 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
     exit 1
 fi
 
-if pgrep -af 'gz sim' >/dev/null; then
+if pgrep -af '^(/usr/bin/)?gz sim([[:space:]]|$)' >/dev/null; then
     echo "ATTENZIONE: Gazebo e' gia' in esecuzione."
     echo "Ferma prima la simulazione precedente."
     exit 1

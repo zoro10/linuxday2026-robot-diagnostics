@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PULSE-1 Live | LinuxDay 2026</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: system-ui, sans-serif;
+      background: #0b1220;
+      color: #f1f5f9;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    header, main { max-width: 1250px; margin: auto; padding: 22px; }
+    header {
+      display: flex; justify-content: space-between;
+      align-items: center; gap: 15px; flex-wrap: wrap;
+    }
+    h1 { margin: 4px 0; }
+    small { color: #38bdf8; letter-spacing: 2px; }
+    p { color: #94a3b8; }
+    a { color: #7dd3fc; }
+    .panel {
+      background: #172338;
+      border: 1px solid #304057;
+      border-radius: 15px;
+      padding: 18px;
+    }
+    svg { display: block; width: 100%; height: auto; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 15px; margin-top: 15px;
+    }
+    .metric span {
+      display: block; color: #94a3b8; font-size: 13px;
+    }
+    .metric strong { display: block; margin-top: 8px; font-size: 24px; }
+    #feed { color: #38bdf8; }
+    #notice { text-align: center; }
+    @media (max-width: 680px) {
+      .metrics { grid-template-columns: repeat(2,1fr); }
+      .metric strong { font-size: 19px; }
+    }
+  </style>
+  <script src="/dashboard/rover/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <small>LINUXDAY 2026 / ROBOT SIMULATION</small>
+      <h1>PULSE-1 Live</h1>
+      <p>Vista 2D del mondo Gazebo · Telemetria ROS 2</p>
+    </div>
+    <a href="/dashboard/">Apri Diagnostic Dashboard</a>
+  </header>
+
+  <main>
+    <section class="panel">
+      <p>Stato collegamento: <strong id="feed">CONNECTING</strong></p>
+
+      <svg viewBox="0 0 900 510"
+           role="img" aria-label="Mappa del rover e dell'ostacolo">
+        <rect width="900" height="510" fill="#101c2f"/>
+
+        <g stroke="#29394e" stroke-width="1">
+          <path d="M150 20 V490 M380 20 V490 M610 20 V490 M840 20 V490"/>
+          <path d="M20 140 H880 M20 255 H880 M20 370 H880"/>
+        </g>
+
+        <g fill="#94a3b8" font-size="14">
+          <text x="145" y="483">X=0</text>
+          <text x="375" y="483">X=2</text>
+          <text x="605" y="483">X=4</text>
+          <text x="835" y="483">X=6</text>
+          <text x="24" y="247">Y=0</text>
+        </g>
+
+        <polyline id="trail" fill="none"
+                  stroke="#38bdf8" stroke-width="3"
+                  stroke-dasharray="6 5"/>
+
+        <!-- Ostacolo SDF: x=4, y=0, dimensioni 0.3 x 3 m -->
+        <rect x="592.75" y="82.5" width="34.5" height="345"
+              fill="#b45309" stroke="#fbbf24" stroke-width="2"/>
+        <text x="643" y="72" fill="#fbbf24" font-size="17">OSTACOLO</text>
+
+        <!-- Origine del gruppo = origine del modello PULSE-1 -->
+        <g id="rover" visibility="hidden">
+          <rect x="-133.07" y="-57.5"
+                width="231.3" height="115" rx="8"
+                fill="#2563eb" stroke="#93c5fd" stroke-width="3"/>
+          <rect x="44" y="-85" width="40" height="26" rx="5"
+                fill="#64748b"/>
+          <rect x="44" y="59" width="40" height="26" rx="5"
+                fill="#64748b"/>
+          <path d="M65 -14 L86 0 L65 14"
+                fill="none" stroke="white" stroke-width="4"/>
+
+          <!-- LiDAR a x=0.299 m dall'origine del modello -->
+          <line id="beam" x1="34.34" y1="0"
+                x2="34.34" y2="0"
+                stroke="#38bdf8" stroke-width="3"
+                stroke-dasharray="6 4"/>
+          <circle cx="34.34" cy="0" r="8"
+                  fill="#7dd3fc" stroke="#ffffff" stroke-width="2"/>
+        </g>
+      </svg>
+    </section>
+
+    <section class="metrics">
+      <div class="panel metric"><span>Posizione X</span><strong id="x">—</strong></div>
+      <div class="panel metric"><span>Posizione Y</span><strong id="y">—</strong></div>
+      <div class="panel metric"><span>Orientamento</span><strong id="yaw">—</strong></div>
+      <div class="panel metric"><span>Velocità</span><strong id="speed">—</strong></div>
+      <div class="panel metric"><span>Distanza LiDAR</span><strong id="distance">—</strong></div>
+      <div class="panel metric"><span>Comportamento</span><strong id="motion">—</strong></div>
+    </section>
+
+    <p id="notice">
+      La mappa usa la geometria SDF. La traccia registra solo
+      gli spostamenti osservati da questo browser.
+    </p>
+  </main>
+</body>
+</html>

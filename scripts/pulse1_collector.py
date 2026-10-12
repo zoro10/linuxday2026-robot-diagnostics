@@ -5,6 +5,7 @@ import time
 from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
+from math import atan2
 
 import rclpy
 from rclpy.node import Node
@@ -64,10 +65,17 @@ class Pulse1Collector(Node):
 
     def on_odom(self, msg):
         self.mark('odometry')
+        q = msg.pose.pose.orientation
+        yaw = atan2(
+            2 * (q.w * q.z + q.x * q.y),
+            1 - 2 * (q.y * q.y + q.z * q.z)
+        )
+
         self.position = {
             'x': round(msg.pose.pose.position.x, 3),
             'y': round(msg.pose.pose.position.y, 3),
-            'speed_m_s': round(msg.twist.twist.linear.x, 3)
+            'speed_m_s': round(msg.twist.twist.linear.x, 3),
+            'yaw_rad': round(yaw, 4)
         }
 
     def on_imu(self, msg):
