@@ -25,6 +25,12 @@ echo "[1/4] Avvio Gazebo..."
 tmux new-session -d -s "$SESSION" -n gazebo \
   "bash -c 'source /opt/ros/jazzy/setup.bash; exec gz sim -s -r --headless-rendering \"$ROOT/simulation/worlds/pulse1.sdf\" -v 3'"
 
+# Mantieni la finestra se Gazebo termina.
+tmux set-window-option   -t "$SESSION:gazebo" remain-on-exit on
+
+# Salva l'output di Gazebo su disco.
+tmux pipe-pane -o   -t "$SESSION:gazebo"   "cat >> $ROOT/runtime/gazebo.log"
+
 echo "[2/4] Attendo il mondo..."
 ready=0
 for i in {1..30}; do
