@@ -92,6 +92,11 @@ class Handler(BaseHTTPRequestHandler):
                 payload = {
                     'robot': data.get('robot', 'PULSE-1'),
                     'diagnostics': result,
+                    'linux': data.get('linux', {}),
+                    'web': data.get('web', {}),
+                    'nodes': data.get('nodes', {}),
+                    'timestamp_utc': data.get('timestamp_utc'),
+                    'lidar_front_distance_m': data.get('lidar_front_distance_m'),
                     'position': data.get('position'),
                     'topics': data.get('topics', {})
                 }

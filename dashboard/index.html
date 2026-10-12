@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PULSE-1 | LinuxDay 2026</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+  <script src="/dashboard/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div>
+      <small>LINUXDAY 2026 / DIAGNOSTIC PLATFORM</small>
+      <h1>PULSE-1 Diagnostics</h1>
+      <p>Osservabilità Linux e ROS 2 in tempo reale</p>
+    </div>
+    <div class="connection">
+      <strong id="telemetry">CONNECTING</strong>
+      <span id="age">Attesa dati...</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="scores">
+      <article class="panel score-card">
+        <h2>Robot Health</h2>
+        <strong class="score" id="robot-score">—</strong>
+        <span class="state" id="robot-status">UNKNOWN</span>
+      </article>
+      <article class="panel score-card">
+        <h2>Platform Health</h2>
+        <strong class="score" id="platform-score">—</strong>
+        <span class="state" id="platform-status">UNKNOWN</span>
+      </article>
+    </section>
+
+    <section class="columns">
+      <article class="panel">
+        <h2>Linux Simulation Host</h2>
+        <div class="metric"><span>CPU</span><b id="cpu">—</b></div>
+        <div class="metric"><span>RAM</span><b id="ram">—</b></div>
+        <div class="metric"><span>Disco</span><b id="disk">—</b></div>
+        <div class="metric"><span>Load 1 minuto</span><b id="load">—</b></div>
+      </article>
+
+      <article class="panel">
+        <h2>ROS 2 Sensors</h2>
+        <div class="metric"><span>LiDAR</span><b id="lidar">—</b></div>
+        <div class="metric"><span>IMU</span><b id="imu">—</b></div>
+        <div class="metric"><span>Odometry</span><b id="odometry">—</b></div>
+        <div class="metric"><span>Ostacolo frontale</span><b id="distance">—</b></div>
+      </article>
+    </section>
+
+    <section class="columns">
+      <article class="panel">
+        <h2>PULSE-1 Position</h2>
+        <div class="metric"><span>Coordinata X</span><b id="pos-x">—</b></div>
+        <div class="metric"><span>Coordinata Y</span><b id="pos-y">—</b></div>
+        <div class="metric"><span>Velocità</span><b id="speed">—</b></div>
+      </article>
+
+      <article class="panel">
+        <h2>Servizi applicativi</h2>
+        <div class="metric"><span>PHP / HTTP</span><b id="http">—</b></div>
+        <div class="metric"><span>Query MariaDB</span><b id="db">—</b></div>
+        <div class="metric"><span>Diagnostic API</span><b id="api">—</b></div>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Diagnostic Events</h2>
+      <ul id="problems"><li>Attesa della telemetria...</li></ul>
+    </section>
+  </main>
+
+  <footer>PULSE-1 · LinuxDay 2026 · Tor Vergata · 24 ottobre</footer>
+</body>
+</html>
