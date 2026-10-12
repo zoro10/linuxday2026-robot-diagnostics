@@ -17,6 +17,7 @@ from pulse1_linux_metrics import LinuxMetrics
 from pulse1_health_score import evaluate
 from pulse1_health_v2 import evaluate as evaluate_v2
 from pulse1_web_check import check_web
+from pulse1_events import EventJournal
 
 
 class Pulse1Collector(Node):
@@ -27,6 +28,10 @@ class Pulse1Collector(Node):
         self.output = (
             Path(__file__).resolve().parent.parent
             / 'runtime' / 'pulse1_status.json'
+        )
+
+        self.events = EventJournal(
+            self.output.with_name('pulse1_events.jsonl')
         )
 
         self.topics = {
@@ -153,6 +158,12 @@ class Pulse1Collector(Node):
         payload['web'] = self.web_state
         payload['health'] = evaluate(payload)
         payload['diagnostics'] = evaluate_v2(payload)
+
+        if now - self.started >= 8.0:
+            for event in self.events.update(nodes, result):
+                self.get_logger().warning(
+                    f"{event['type']}: {event['component']}"
+                )
 
         temporary = self.output.with_suffix('.json.tmp')
         temporary.write_text(json.dumps(payload, indent=2) + '\n')

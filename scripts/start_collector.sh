@@ -9,7 +9,7 @@ if tmux has-session -t "=$SESSION" 2>/dev/null; then
     exit 0
 fi
 
-if pgrep -f '[p]ulse1_collector.py' >/dev/null; then
+if pgrep -f '^(/usr/bin/)?python3 scripts/pulse1_collector[.]py$' >/dev/null; then
     echo "Collector gia' attivo fuori tmux."
     echo "Non avvio una seconda istanza."
     exit 0

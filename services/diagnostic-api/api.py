@@ -2,6 +2,7 @@
 """API diagnostica PULSE-1, indipendente da ROS 2."""
 
 import json
+from collections import deque
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -12,6 +13,39 @@ from pulse1_health_v2 import evaluate
 DATA = Path(os.getenv(
     'PULSE1_STATUS_PATH', '/runtime/pulse1_status.json'
 ))
+
+
+EVENTS = DATA.with_name('pulse1_events.jsonl')
+
+
+def get_events(limit=50):
+    events = deque(maxlen=limit)
+
+    try:
+        with EVENTS.open(encoding='utf-8') as stream:
+            for line in stream:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+
+                if not isinstance(event, dict):
+                    continue
+
+                if event.get('type') not in ('FAULT', 'RECOVERY'):
+                    continue
+
+                if not isinstance(event.get('component'), str):
+                    continue
+
+                if not isinstance(event.get('timestamp_utc'), str):
+                    continue
+
+                events.append(event)
+    except FileNotFoundError:
+        return []
+
+    return list(reversed(events))
 
 
 def get_diagnostics():
@@ -64,6 +98,19 @@ class Handler(BaseHTTPRequestHandler):
                 'service': 'pulse1-diagnostic-api',
                 'status': 'OK'
             })
+            return
+
+        if path == '/api/events':
+            try:
+                events = get_events()
+                self.respond(200, {
+                    'events': events,
+                    'count': len(events)
+                })
+            except OSError:
+                self.respond(500, {
+                    'error': 'Event journal unavailable'
+                })
             return
 
         if path not in (
