@@ -48,40 +48,61 @@ def evaluate(data, now=None):
 
     old = evaluate_v03(data)
     parts = old['components']
+    nodes = data.get('nodes', {})
+    web_status = data.get('web', {}).get('status')
 
-    # Robot: 25 Linux + 30 ROS + 35 sensori
-    robot_points = sum(
-        parts[name]['score']
-        for name in ('linux', 'ros2', 'sensors')
-    )
-    robot_score = round(robot_points * 100 / 90)
+    # Robot: controller 30 + sensori 70.
+    controller_ok = nodes.get('pulse1_controller') is True
+    controller_points = 30 if controller_ok else 0
+    sensor_points = parts['sensors']['score'] * 2
 
-    robot_status = (
-        'OK' if robot_score == 100
-        else 'DEGRADED' if robot_score >= 70
-        else 'FAIL'
+    robot_score = controller_points + sensor_points
+
+    robot_prefixes = (
+        'Sensore non aggiornato:',
+        'Frequenza assente:',
+        'Frequenza bassa:',
+        'Frequenza critica:',
     )
 
     robot_problems = [
-        p for p in old['problems']
-        if not p.startswith('Servizio web')
+        problem for problem in old['problems']
+        if problem.startswith(robot_prefixes)
+        or problem == 'Nodo ROS assente: pulse1_controller'
     ]
 
-    # Piattaforma: collector 40, web 40, API 20
-    web_ok = data.get('web', {}).get('status') == 'OK'
-    web_fail = data.get('web', {}).get('status') == 'FAIL'
-
-    platform_score = 40 + (40 if web_ok else 0)
-
-    if web_fail:
-        platform_status = 'DEGRADED'
-        platform_problems = ['Servizio web non disponibile']
+    if not controller_ok:
+        robot_status = 'FAIL'
+    elif robot_score == 100 and not robot_problems:
+        robot_status = 'OK'
+    elif robot_score >= 70:
+        robot_status = 'DEGRADED'
     else:
-        platform_status = 'PARTIAL'
-        platform_problems = []
+        robot_status = 'FAIL'
+
+    # Piattaforma: Linux 25, collector 25,
+    # web 20, bridge 10, API 20.
+    linux_points = parts['linux']['score']
+    collector_points = 25
+    bridge_ok = nodes.get('pulse1_bridge') is True
+    bridge_points = 10 if bridge_ok else 0
+    web_points = 20 if web_status == 'OK' else 0
+
+    platform_problems = [
+        problem for problem in old['problems']
+        if problem not in robot_problems
+    ]
+
+    if web_status not in ('OK', 'FAIL'):
+        platform_problems.append('Servizio web non verificato')
 
     platform_problems.append(
         'Diagnostic API non ancora verificata'
+    )
+
+    platform_score = (
+        linux_points + collector_points
+        + bridge_points + web_points
     )
 
     return {
@@ -92,12 +113,19 @@ def evaluate(data, now=None):
         },
         'platform_health': {
             'score': platform_score,
-            'status': platform_status,
+            'status': 'PARTIAL',
             'components': {
-                'collector': {'score': 40, 'max': 40},
+                'linux': {
+                    'score': linux_points, 'max': 25
+                },
+                'collector': {
+                    'score': collector_points, 'max': 25
+                },
                 'web': {
-                    'score': 40 if web_ok else 0,
-                    'max': 40,
+                    'score': web_points, 'max': 20
+                },
+                'bridge': {
+                    'score': bridge_points, 'max': 10
                 },
                 'api': {'score': 0, 'max': 20},
             },

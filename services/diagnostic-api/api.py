@@ -69,12 +69,14 @@ def get_diagnostics():
 
     if result['telemetry']['status'] != 'FRESH':
         platform['status'] = 'FAIL'
+    elif data.get('web', {}).get('status') not in ('OK', 'FAIL'):
+        platform['status'] = 'PARTIAL'
     elif platform['score'] == 100 and not platform['problems']:
         platform['status'] = 'OK'
-    elif data.get('web', {}).get('status') == 'FAIL':
-        platform['status'] = 'DEGRADED'
+    elif platform['score'] < 70:
+        platform['status'] = 'FAIL'
     else:
-        platform['status'] = 'PARTIAL'
+        platform['status'] = 'DEGRADED'
 
     return data, result
 
