@@ -1,115 +1,110 @@
-# PULSE-1 — Memo di progetto e roadmap riorganizzata
+# PULSE-1 — Checkpoint progettuale e roadmap delle due demo
 
-**Data della decisione:** 13 ottobre 2026  
-**Evento:** LinuxDay, 24 ottobre 2026  
-**Orizzonte di sviluppo:** 14–22 ottobre 2026  
-**23 ottobre:** freeze, backup e prova generale, senza nuove funzionalità  
+**Decisione:** 13 ottobre 2026  
+**Evento:** LinuxDay 2026, sabato 24 ottobre  
+**Sviluppo:** 14–22 ottobre; **23 ottobre:** freeze e prova generale  
 **Repository:** `git@github.com:zoro10/linuxday2026-robot-diagnostics.git`  
-**Baseline Git verificata:** `27fe28c` — `Separate robot and platform health scoring` (`main` sincronizzato con `origin/main` al 13/10).  
-**Stato del presente documento:** proposta di checkpoint documentale; **non ancora commit né push su GitHub**.
+**Ultimo commit verificato nella sessione:** `02cdfde` — *Document PULSE-1 navigation missions and roadmap to Oct 22*, su `main` sincronizzato.  
+**Stato di questo documento:** memo aggiornato pronto da aggiungere a Git; **non ancora pubblicato nel repository**.
 
-## 1. Decisione da preservare
+## 1. Decisione principale: due demo pubbliche, una sola piattaforma
 
-**PULSE-1 è il protagonista.** La diagnostica serve a rendere comprensibile la sua esperienza, non a sostituirsi al rover. Il robot deve interpretare l'ambiente **esclusivamente dalle misure dei propri sensori e dall'odometria**, senza ricevere dal simulatore la mappa degli ostacoli, la loro posizione o una svolta precalcolata. Gazebo simula la fisica e genera i dati sensoriali; non suggerisce la soluzione.
+**PULSE-1 è il protagonista.** Le due dimostrazioni sono complementari e devono entrambe essere mostrate al pubblico. La seconda **non sostituisce** la prima.
 
-Si mantengono le due dashboard:
+### Demo 1 — «Il robot sta bene?» (baseline già funzionante)
 
-- **PULSE-1 Diagnostics (`/dashboard/`)**: quadro generale della piattaforma, Robot Health, Platform Health, Linux host, servizi, nodi, sensori, cronologia FAULT/RECOVERY. Mantenerla sostanzialmente invariata.
-- **PULSE-1 Rover Cockpit (`/dashboard/rover/`)**: evolvere la pagina del rover come vista principale della demo, articolata in **stato dei sensori**, **risultati dei sensori**, **percezione spaziale da scansioni LiDAR**, **interpretazione / decisione dichiarata dal controller**.
+**Tema:** osservabilità, diagnostica, sicurezza e recupero controllato.
 
-Le percentuali **Sensor Health 0–100** descrivono una **valutazione operativa convenzionale**, non la probabilità di funzionamento o l'accuratezza metrologica. Definire soglie, tempi, cause e comportamento `UNKNOWN` prima di implementarle. Non ricavare un 88% semplicemente da una frequenza di 4,4 Hz su 5 Hz.
+Sequenza pubblica prevista:
 
-## 2. Due missioni, stesso ambiente
+1. Avvio di Gazebo, ROS 2, PULSE-1 e delle due dashboard; stato iniziale dei sensori e punteggi Robot Health / Platform Health.
+2. Il rover si muove e produce telemetria; il pubblico osserva sensori, metriche e stato generale.
+3. Introduciamo un guasto **controllato**, preferibilmente interrompendo il bridge LiDAR dedicato.
+4. Il collector e l'API segnalano il problema; il controller entra in `NO_LIDAR` e comanda velocità zero.
+5. Ripristiniamo **manualmente** il componente e osserviamo il ritorno dei dati e il comportamento previsto.
+6. Mostriamo `FAULT`, `RECOVERY` e durata nel Diagnostic Event Journal.
 
-**Scenario comune di partenza:** PULSE-1 con ostacolo a circa **1 m davanti** e secondo ostacolo a circa **1 m verso sinistra, a +45°** (posizioni del mondo fissate **solo nello scenario Gazebo**). Spazio libero verso destra e per un percorso alternativo, da verificare considerando ingombro del rover e margini di sicurezza.
+**Già verificato:** architettura in esecuzione, API e due dashboard raggiungibili, Health Score separati, test su collector/API/LiDAR/controller, storico persistente con 34 eventi all'ultimo controllo, prova di stabilità Gazebo di 60 minuti e ripristino dopo riavvio. **Da completare:** prova visiva delle dashboard durante l'errore e sceneggiatura della dimostrazione. Non affermare che il sistema ripari automaticamente tutti i guasti: oggi rileva e consente ripristini guidati/manuali.
 
-**Obiettivo della missione:** arrivare a un punto **10 m in avanti rispetto alla posa iniziale**, non percorrere soltanto 10 m di traiettoria. Alla partenza si fissa un *goal* nel frame del mondo: `goal_x = x0 + 10*cos(yaw0)`, `goal_y = y0 + 10*sin(yaw0)`. L'odometria serve a misurare il progresso e verificare il raggiungimento, con tolleranza proposta `<= 0,5 m`.
+**Vincolo:** non compromettere questa baseline nello sviluppo della Demo 2. Effettuare regressioni giornaliere brevi su `/api/status`, `/api/events`, dashboard, sensori, sicurezza e persistenza dello storico.
 
-| Modalità | Ordine impartito all'inizio | Comportamento atteso | Esito corretto |
-|---|---|---|---|
-| **STOP** | «Vai 10 m avanti; se trovi un ostacolo fermati» | Avanza; al rilevamento di ostacolo frontale entro la soglia di sicurezza si arresta | **STOP_PER_OBSTACLE** documentato; non è un guasto del robot e non raggiunge necessariamente la meta |
-| **AVOID** | «Vai 10 m avanti; se trovi ostacoli cerca autonomamente una via libera» | Valuta i settori del LiDAR, sceglie la direzione libera, aggira gli ostacoli e ripunta al goal | **GOAL_REACHED** quando la distanza dalla meta è `<= 0,5 m`, senza collisioni |
+### Demo 2 — «Che cosa vede e decide PULSE-1?» (da sviluppare)
 
-**Non programmare la svolta a destra.** Nello scenario la destra dovrebbe emergere come scelta conveniente perché davanti e a sinistra sono occupati; con geometria diversa la decisione potrebbe cambiare. Non confondere navigazione locale reattiva con SLAM, mappatura globale o riconoscimento semantico degli oggetti.
+**Tema:** sensori, percezione, ragionamento locale e navigazione autonoma controllata.
 
-## 3. Informazioni visibili nel Rover Cockpit
+L'operatore sceglie **scenario** e **modalità** prima dell'avvio, poi assegna una destinazione. PULSE-1 riceve il goal, i dati dei sensori e l'odometria; **non riceve la geometria reale di Gazebo né una direzione di aggiramento preimpostata**.
 
-| Vista | Contenuto richiesto | Provenienza verificabile |
+- **STOP:** raggiungi il goal se libero; al primo ostacolo che blocca il percorso, fermati e dichiara `STOP_PER_OBSTACLE`.
+- **AVOID:** raggiungi il goal cercando un varco dai settori LiDAR, evitando gli ostacoli e riallineandoti alla destinazione; dichiara `GOAL_REACHED` soltanto quando il goal è realmente raggiunto.
+
+**Goal:** punto posto 10 m davanti alla posa iniziale (non 10 m di strada percorsa). Con yaw iniziale `θ`: `goal = (x0 + 10 cos θ, y0 + 10 sin θ)`. Tolleranza finale proposta: **0,5 m**. `NO_LIDAR`, `NO_PATH` e `TIMEOUT` devono dare luogo a un arresto sicuro, non a movimenti ciechi.
+
+## 2. Scenari selezionabili (stessa logica di navigazione)
+
+| Scenario | Geometria introdotta **soltanto in Gazebo** | Scopo |
 |---|---|---|
-| **Sensor Health** | LiDAR / IMU / odometria: punteggio operativo 0–100, stato OK/DEGRADED/FAIL/UNKNOWN, Hz effettivi, freschezza e motivo del degrado | Collector e valutatore; stessa metodologia per ciascun sensore |
-| **Sensor Readings** | Distanze LiDAR per settori, posizione X/Y, orientamento, velocità, accelerazioni e velocità angolari IMU se esposte | Messaggi ROS reali (`LaserScan`, `Odometry`, `Imu`) |
-| **Perception** | Rover 2D e scansioni LiDAR, occupazione frontale/sinistra/destra e passaggi liberi con grado di incertezza | Scansioni LiDAR ricevute, non geometria ground-truth Gazebo |
-| **Robot Decision** | Missione STOP/AVOID, goal, stato macchina, settore scelto, comando velocità/rotazione, motivo e distanza residua | Controller ROS 2, pubblicato dal controller e letto dal collector |
-| **Platform Overview** | Linux CPU/RAM/disco/load, servizi, API, collector, bridge, Event Journal, punteggi Robot/Platform Health | Dashboard diagnostica attuale, da preservare |
+| **S1 — Ostacolo frontale** | Un ostacolo sul tragitto | Dimostrare STOP e primo aggiramento AVOID |
+| **S2 — Fronte + sinistra** | Ostacolo davanti, secondo a sinistra circa +45° | La scelta di passare a destra deve emergere dal LiDAR |
+| **S3 — Fronte + destra** | Scenario speculare a S2 | Verificare che non esista una svolta a destra hardcoded |
+| **S4 — Ostacoli multipli** | Ostacoli sfalsati lungo il percorso | Estensione, solo se i primi tre scenari sono stabili |
 
-Una missione terminata correttamente in **STOP_PER_OBSTACLE** non deve penalizzare Robot Health. `NO_LIDAR` deve imporre immediatamente velocità nulla, indipendentemente dalla modalità. Valori obsoleti devono diventare `UNKNOWN`, mai restare apparentemente live.
+**Otto combinazioni teoriche:** S1–S4 × STOP/AVOID; **non promettere otto dimostrazioni robuste entro il 22**. Obiettivo obbligatorio: S1 e S2 in entrambe le modalità, con S3 come verifica di generalità; S4 è un bonus.
 
-## 4. Architettura funzionale minima
+**Nota geometrica:** con un ostacolo iniziale a **1 m** e soglia di arresto frontale a **1,2 m**, la modalità STOP si fermerà immediatamente. Per mostrare un avvicinamento prima dello STOP, preparare una variante con ostacolo inizialmente più distante, ad esempio 2,5–3 m; mantenere il confronto STOP/AVOID nello stesso scenario quando presentato come confronto diretto.
 
-- **Gazebo Harmonic + modello PULSE-1:** scenario, ostacoli e simulazione; nessun dato privilegiato al controller.
-- **Bridge ROS 2 Jazzy:** `LaserScan`, `Odometry`, `Imu`, `cmd_vel`. Il bridge LiDAR rimane separato per consentire guasti controllati.
-- **Controller PULSE-1:** missione `STOP` o `AVOID`, target fissato all'avvio, macchina a stati, controllo geometrico e comando `cmd_vel`. Stati candidati: `READY`, `GO_TO_GOAL`, `OBSTACLE_DETECTED`, `AVOIDING`, `REJOINING_GOAL`, `GOAL_REACHED`, `STOP_PER_OBSTACLE`, `NO_LIDAR`, `NO_PATH`, `TIMEOUT`.
-- **Collector:** aggiungere misure sensoriali utili, stato del controller/missione e Sensor Health 0–100 senza interrompere la raccolta attuale.
-- **Diagnostic API:** aggiungere dati in sola lettura al payload già esistente; conservare funzionalità di status/eventi e isolamento dei servizi.
-- **Dashboard rover:** aggiungere i quattro riquadri; nessuna logica che 'indovina' una decisione invece di leggere quella pubblicata dal controller.
-- **Selettore missione:** preferenza per una scelta esplicita prima del run e indicazione chiara nella dashboard. **MVP affidabile:** CLI/script sul terminale che imposta la modalità e avvia la missione; **opzionale:** pulsante web soltanto se la catena di comando è sicura e collaudata. Non esporre comandi arbitrari tramite l'API pubblica.
+## 3. Dashboard: ruoli distinti, nessuna informazione inventata
 
-## 5. Scaletta dal 14 al 22 ottobre — obiettivi giornalieri verificabili
+**Dashboard A — PULSE-1 Diagnostics (`/dashboard/`):** rimane sostanzialmente invariata; Robot Health, Platform Health, CPU/RAM/disco/load Linux, servizi, collector/API/bridge, sensori ed Event Journal. Il pannello **Linux Simulation Host** resta qui.
 
-| Data | Lavoro principale | Deliverable / test di accettazione |
+**Dashboard B — PULSE-1 Rover Cockpit (`/dashboard/rover/`):** evolve in quattro viste simultanee:
+
+| Vista | Domanda | Dato mostrato e provenienza |
 |---|---|---|
-| **Mer 14/10** | Validazione capacità di sterzata (`angular.z`), orientamento da odometria, ampiezza/FOV e settori LaserScan; predisposizione mondo con ostacolo frontale e altro a +45° sinistra; backup scenario attuale. | Rover ruota realmente; settori LiDAR distinguibili; scena a due ostacoli ripetibile; nessuna collisione di spawn. Se sterzata impossibile, priorità assoluta a correggere modello/controllo. |
-| **Gio 15/10** | Definire missione (goal a +10 m nel frame iniziale), comando STOP/AVOID, stato e logging espliciti; implementare **STOP** con arresto sicuro. | Selezione STOP, partenza, ostacolo identificato e arresto prima della collisione; stato `STOP_PER_OBSTACLE` esportabile; ripartenza della demo ripetibile. |
-| **Ven 16/10** | Prima versione **AVOID**: scelta da settori LiDAR, controllo `linear.x`/`angular.z`, margine di collisione, macchina a stati per aggirare e riallinearsi al goal. | Evitamento di un ostacolo, senza direzione hardcoded; distanze e decisioni registrate. Eventuali funzioni originali della dashboard già realizzate restano attive. |
-| **Sab 17/10** | Prova **AVOID con due ostacoli**: fronte a ~1 m, sinistra +45° a ~1 m; il rover deve individuare il varco a destra e poi tornare verso il goal. | Almeno un run che supera entrambi gli ostacoli e raggiunge il goal entro 0,5 m senza collisioni; se fallisce, raccogliere log/pose e correggere oscillazione o clearance. |
-| **Dom 18/10** | Stabilizzare navigazione: timeout, blocco/oscillazione, assenza LiDAR, nessun settore sicuro, reset dello scenario, tuning delle velocità. | Tre run consecutivi AVOID sullo stesso scenario senza collisioni e senza interventi manuali; in caso di situazione insolubile arresto sicuro `NO_PATH`/`TIMEOUT`. **Primo checkpoint GO/NO-GO.** |
-| **Lun 19/10** | Sensor Health individuale 0–100: regole esplicite di age/rate/validità, guasto totale/parziale, `UNKNOWN`; esportare letture IMU/LiDAR/odometria necessarie e stato missione/decisione. | Test sintetici 100 / degradato / 0 / UNKNOWN; API JSON coerente, nessuna regressione Robot/Platform Health e FAULT/RECOVERY. |
-| **Mar 20/10** | UI del **Rover Cockpit**: quattro viste Sensor Health, Sensor Readings, Perception LiDAR e Robot Decision; modalità visibile; continuità della dashboard di piattaforma. | Run STOP/AVOID osservabile sul browser, decisioni provenienti dal controller, dati stale gestiti; demo fruibile su schermo laptop. **Secondo checkpoint GO/NO-GO.** |
-| **Mer 21/10** | Prove end-to-end e operatività evento: avvio/ripristino, networking laptop↔VM e accesso remoto/VPN ove previsto, fallback offline, reset tra missioni, registrazione evidenze. | Sequenza STOP→reset→AVOID ripetuta; log e screenshot; procedure di recovery testate; nessun nuovo componente introdotto in caso di instabilità. |
-| **Gio 22/10** | **Prova generale e certificazione demo**: cronometria dei due scenari, verifica raggiungimento goal, sicurezza, monitoraggio, fallimenti previsti; preparare storyboard per il pubblico. | Almeno tre dimostrazioni complete e ripetibili (STOP + AVOID), console e browser puliti, backup e Git sincronizzati; decisione di congelamento delle funzionalità. |
+| **Sensor Health** | «Quanto funziona ogni sensore?» | LiDAR, IMU e odometria: 0–100%, OK/DEGRADED/FAIL/UNKNOWN, Hz, age, causa del degrado; calcolo esplicito dal collector |
+| **Sensor Readings** | «Che cosa misurano?» | Distanze per settore LiDAR, posizione, velocità, orientamento e, se esposte, misure IMU da messaggi ROS |
+| **Perception** | «Che ambiente percepisce?» | Settori occupati/liberi, ostacoli e rappresentazione 2D basata esclusivamente su `LaserScan` |
+| **Robot Decision** | «Che cosa ha capito e cosa decide?» | Modalità, goal, stato del controller, direzione scelta, motivo, `cmd_vel` e distanza residua, **pubblicati dal controller** |
 
-**Ven 23/10:** freeze, backup, verifica finale e prova parlata; solo bugfix bloccanti.  
-**Sab 24/10:** LinuxDay — demo pubblica.
+**Regola per Sensor Health:** 100% significa che il sensore soddisfa i controlli definiti, non che sia fisicamente perfetto; evitare di trasformare direttamente una frequenza nominale in percentuale di affidabilità. Distinguere assenza completa, riduzione di frequenza, dato obsoleto e impossibilità di valutazione (`UNKNOWN`). Un ostacolo rilevato **non è un guasto**.
 
-I blocchi collector/API, dashboard diagnostica, timeline eventi, stabilità 60 min e prove di reboot già completati il 13/10 **non vanno rifatti come sviluppo**: rimangono controlli di regressione e riserva di tempo. La scaletta pregressa del 20–23 (accesso laptop, fallback, prove e freeze) è conservata, concentrando la nuova funzionalità entro il 20.
+## 4. Architettura e vincoli da preservare
 
-## 6. Criteri di successo e sicurezza
+- Gazebo Harmonic simula la scena; ROS 2 Jazzy, bridge principale e bridge LiDAR dedicato trasportano misure e comandi. Niente ground truth dell'ambiente nel controller.
+- Controller PULSE-1: macchina a stati STOP/AVOID, gestione goal, scelta locale basata su settori LiDAR, comandi `linear.x` e `angular.z`, stop sicuro.
+- Collector: acquisizione dei sensori, Sensor Health e stato decisionale; scrittura JSON atomica; Event Journal persistente.
+- API diagnostica: espone dati e diagnosi, resta indipendente da ROS 2. Dashboard visualizzano soltanto ciò che proviene da processi reali.
+- Carico VM limitato (**2 vCPU**): preferire controllo locale leggero; niente introduzione frettolosa di Nav2/SLAM. Mantenere Gazebo, collector e servizi esistenti stabili.
+- Durante il lavoro adottare **massimo tre comandi e un controllo** per blocco operativo, con commit piccoli e verifiche di regressione.
 
-1. **Niente conoscenza privilegiata dell'ambiente:** nessuna coordinata ostacolo fornita al controller; solo goal + telemetria ROS.
-2. **STOP:** al fronte bloccato il comando finale è 0 m/s e lo stato è `STOP_PER_OBSTACLE`, non Robot Health FAIL.
-3. **AVOID:** il percorso è scelto da sensori e odometria; si considera riuscito solo con `GOAL_REACHED`, errore di posizione finale `<= 0,5 m`, nessuna collisione e nessun comando manuale durante la corsa.
-4. **Fail-safe:** LiDAR mancante/non fresco -> `NO_LIDAR` + `cmd_vel` zero; nessun varco/timeout -> stop con stato esplicito. Con 0,18 m/s nominali, prevedere timeout iniziale di almeno 180 s per un goal a 10 m con deviazioni, da verificare sul campo.
-5. **Test sensori:** qualità 0–100 visibile e giustificata; guasto totale/parziale distinguibili; non trattare un ostacolo come guasto del LiDAR.
-6. **Non regressione:** `/api/status`, `/api/events`, entrambe le dashboard, Robot Health, Platform Health, 34 eventi storici, processi tmux, Docker e sicurezza d'isolamento restano integri.
-7. **Reset ripetibile:** stesso punto iniziale, stesso mondo, stesso goal; prima di ogni confronto reset dello scenario senza cancellare lo storico diagnostico.
+## 5. Roadmap riorganizzata: 14–22 ottobre
 
-## 7. Rischi e regola di riduzione dello scope
+| Giorno | Priorità | Uscita verificabile |
+|---|---|---|
+| **Mer 14/10 — Fondazioni** | Backup baseline Demo 1; controllare fisica e sterzata `angular.z`, pose/yaw, FOV e settori LiDAR; scenari S1/S2 ripetibili | Rover sterza realmente, distingue fronte/sinistra/destra, reset mondo affidabile; primo commit tecnico |
+| **Gio 15/10 — STOP e missione** | Contratto missione (`goal`, modalità), comando di selezione pre-run, stato esplicito e telemetria della decisione; STOP verificato in S1 e S2 | `STOP_PER_OBSTACLE`, velocità zero e nessuna collisione; baseline Demo 1 ancora funzionante |
+| **Ven 16/10 — AVOID MVP** | Primo controllo locale con scansioni per settore, selezione varco, sterzata, avanzamento e riallineamento alla meta | Un aggiramento reale in S1, senza svolta hardcoded e senza intervento umano |
+| **Sab 17/10 — Due ostacoli** | Stabilizzare AVOID in S2 e verificare S3 speculare; goal raggiunto da odometria | Almeno un run S2 `GOAL_REACHED` entro 0,5 m, nessuna collisione; S3 come test contro hardcoding |
+| **Dom 18/10 — Gate navigazione** | Tre run consecutivi del percorso target, correzione oscillazioni, timeout, `NO_LIDAR` e `NO_PATH`; reset e logging | **GO/NO-GO AVOID**: se instabile, ridurre a S1 e/o S2 affidabili. S4 non prioritario |
+| **Lun 19/10 — Dati e qualità sensori** | Sensor Health 0–100 con guasti parziali/totali; esportare letture LiDAR/IMU/odometria e intenzioni del controller | Test 100/degradato/0/UNKNOWN, API coerente, non regressione di entrambi gli Health Score e dello storico |
+| **Mar 20/10 — Rover Cockpit** | Quattro viste, visualizzazione selettore/modalità e decisioni reali; mantenere Diagnostics invariata | STOP e AVOID osservabili da browser, gestione `STALE` e assenza API. **GO/NO-GO UI** |
+| **Mer 21/10 — Due demo integrate** | Sequenza **Demo 1 completa → reset → Demo 2**; prove laptop/VM, accesso remoto, rete/VPN ove necessario, video e fallback offline | Entrambe le demo eseguibili senza interventi non previsti; prove di guasto e recupero ancora superate |
+| **Gio 22/10 — Collaudo pubblico** | Tre sequenze complete ripetibili, tempi della presentazione, checkpoint Git, backup e scelta scenari definitivi | **Approvazione tecnica delle due demo** e documentazione della versione da portare all'evento |
 
-**Vincolo dominante: 2 vCPU su Proxmox, Gazebo + ROS 2 + collector già con CPU elevata.** Evitare stack di navigazione pesanti, SLAM e Nav2 in questa finestra, salvo evidenza chiara che il carico lo consenta. Preferire un planner locale semplice, testabile, con macchina a stati e logging.
+**Ven 23/10 — Freeze:** solo prove generali, backup e fix bloccanti; nessuna nuova funzionalità.  
+**Sab 24/10 — LinuxDay:** eseguire Demo 1 e Demo 2, con S1/S2 come percorsi principali e S3/S4 soltanto se certificati.
 
-- **14/10:** se il robot non sterza realmente o il LiDAR non fornisce direzioni laterali, questo è il blocco critico da risolvere prima di qualsiasi dashboard.
-- **18/10 sera:** se l'AVOID a due ostacoli non è ripetibile, mettere in sicurezza prima l'aggiramento di un solo ostacolo, dichiarandolo esplicitamente come livello dimostrativo ridotto.
-- **20/10 sera:** se l'autonomia resta instabile, mantenere STOP + percezione/decisione come dimostrazione affidabile e mostrare AVOID soltanto con un caso collaudato; mai presentare una scelta forzata come navigazione autonoma.
-- **Dal 22/10:** niente nuove feature; privilegiare ripetibilità, osservabilità e narrativa.
+## 6. Criteri di accettazione e fallback
 
-## 8. Checkpoint e tracciabilità Git
+**Demo 1 approvata se:** guasto LiDAR visibile, robot in `NO_LIDAR` e `cmd_vel = 0`, recovery manuale riuscito, Event Journal integra coppia FAULT/RECOVERY, dashboard e servizi principali funzionanti.
 
-**Checkpoint sorgente già esistente (verificato):** `27fe28c` — separazione Robot Health e Platform Health. **Non rappresenta la nuova roadmap**.
+**Demo 2 approvata se:** modalità e scenario selezionabili; il controller decide soltanto dai sensori; STOP non collidere; AVOID supera gli ostacoli e arriva al goal entro 0,5 m; il cockpit mostra letture, qualità sensori, percezione e decisione; perdita LiDAR o mancanza di strada termina in sicurezza.
 
-**Checkpoint progettuale proposto da creare nel repo** (soltanto quando questo file viene copiato nella VM):
+**Ordine dei tagli se manca tempo:** eliminare S4, poi S3 dalla demo pubblica, poi ridurre AVOID al solo S1 affidabile; non eliminare Demo 1 e non simulare visivamente un'intelligenza che il controller non possiede. Non sacrificare i controlli sicurezza per mostrare la navigazione.
 
-```bash
-cd ~/vmdiag-app
-mkdir -p docs
-# Copia il file scaricato in docs/PULSE1_Memo_Roadmap_13-22_ottobre_2026.md
-git add docs/PULSE1_Memo_Roadmap_13-22_ottobre_2026.md
-git commit -m "Document PULSE-1 mission modes and roadmap to Oct 22"
-git push origin main
-git status -sb
-```
+**Definizione di successo narrativo:** prima facciamo vedere che *il robot è osservabile, rileviamo un guasto e possiamo recuperare*; poi che *il robot vede, valuta e decide come muoversi*. La Demo 2 amplia la storia, non nasconde la Demo 1.
 
-**Regola dei checkpoint di implementazione:** commit piccoli dopo scenario/sensori, STOP, AVOID MVP, hardening, Sensor Health, Cockpit e collaudo; aggiungere tag/demo baseline a freeze se utile. Non dichiarare completata una funzionalità non testata.
+## 7. Git e checkpoint
 
----
+Questo memo **sostituisce come pianificazione operativa** il contenuto del documento precedente `docs/PULSE1_Memo_Roadmap_13-22_ottobre_2026.md`, senza cancellare la storia Git. La versione più recente verificata del progetto è il commit `02cdfde`. La nuova pianificazione non è ancora stata applicata sulla VM o registrata con un commit.
 
-**Decisione sintetica:** dal 14 al 22 ottobre la priorità è dimostrare due missioni a 10 m nello stesso ambiente, con comportamento STOP o aggiramento realmente autonomo tramite LiDAR; rendere visibili sensori, affidabilità, interpretazione e decisione del rover; conservare la dashboard della piattaforma e chiudere con prove ripetibili e freeze il 23 ottobre.
+**Checkpoint documentale suggerito:** aggiornare quel medesimo file di `docs/`, poi fare `git diff --check`, `git diff`, commit `Update PULSE-1 roadmap for two public demos and scenarios` e push. Una volta eseguito il push, il nuovo hash diventa il punto di ripartenza ufficiale.
