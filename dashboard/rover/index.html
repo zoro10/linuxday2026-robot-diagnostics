@@ -44,6 +44,16 @@
       .metrics { grid-template-columns: repeat(2,1fr); }
       .metric strong { font-size: 19px; }
     }
+
+    .controller-state {
+      margin: 16px 0 0;
+      color: #94a3b8;
+      font-weight: 500;
+    }
+    #controller { margin-left: 8px; }
+    #controller.online { color: #4ade80; }
+    #controller.offline { color: #f87171; }
+    #controller.unknown { color: #fbbf24; }
   </style>
   <script src="/dashboard/rover/app.js" defer></script>
 </head>
@@ -108,6 +118,11 @@
                   fill="#7dd3fc" stroke="#ffffff" stroke-width="2"/>
         </g>
       </svg>
+
+      <p class="controller-state">
+        Controller ROS 2:
+        <strong id="controller" class="unknown">UNKNOWN</strong>
+      </p>
     </section>
 
     <section class="metrics">

@@ -6,6 +6,7 @@
   <title>PULSE-1 | LinuxDay 2026</title>
   <link rel="stylesheet" href="/dashboard/style.css">
   <script src="/dashboard/app.js" defer></script>
+  <script src="/dashboard/events.js" defer></script>
 </head>
 <body>
   <header>
@@ -69,8 +70,14 @@
     </section>
 
     <section class="panel">
-      <h2>Diagnostic Events</h2>
+      <h2>Anomalie attuali</h2>
       <ul id="problems"><li>Attesa della telemetria...</li></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Diagnostic Event Timeline</h2>
+      <p id="event-count">Caricamento storico...</p>
+      <ul id="event-list" class="event-history"></ul>
     </section>
   </main>
 

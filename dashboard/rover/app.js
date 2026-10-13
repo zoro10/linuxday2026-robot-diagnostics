@@ -10,6 +10,12 @@ const ORIGIN_Y = 255;
 const LIDAR_X = 34.34;
 const trail = [];
 
+function setController(status) {
+  const label = get("controller");
+  label.textContent = status;
+  label.className = status.toLowerCase();
+}
+
 function unavailable(reason) {
   get("rover").setAttribute("visibility", "hidden");
   show("feed", reason);
@@ -29,6 +35,15 @@ async function refresh() {
     const p = data.position || {};
     const odom = data.topics?.odometry || {};
     const lidar = data.topics?.lidar || {};
+
+    const controller = data.nodes?.pulse1_controller;
+    const controllerStatus =
+      telemetry?.status === "FRESH" &&
+      typeof controller === "boolean"
+        ? (controller ? "ONLINE" : "OFFLINE")
+        : "UNKNOWN";
+
+    setController(controllerStatus);
 
     if (telemetry?.status !== "FRESH" ||
         odom.status !== "OK" ||
@@ -82,6 +97,7 @@ async function refresh() {
 
   } catch (error) {
     unavailable("API OFFLINE");
+    setController("UNKNOWN");
     console.error("PULSE-1 Live:", error);
   }
 }

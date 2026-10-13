@@ -55,7 +55,11 @@ ros2 run ros_gz_sim create \
 
 echo "[3/4] Avvio bridge ROS/Gazebo..."
 tmux new-window -t "$SESSION" -n bridge \
-  "bash -c 'source /opt/ros/jazzy/setup.bash; exec ros2 run ros_gz_bridge parameter_bridge \"/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock\" \"/model/pulse1_proto/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist\" \"/model/pulse1_proto/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry\" \"/pulse1/imu@sensor_msgs/msg/Imu[gz.msgs.IMU\" \"/pulse1/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan\" --ros-args -r __node:=pulse1_bridge'"
+  "bash \"$ROOT/scripts/pulse1_bridge.sh\" main"
+
+echo "[3b/4] Avvio bridge LiDAR..."
+tmux new-window -t "$SESSION" -n lidar_bridge \
+  "bash \"$ROOT/scripts/pulse1_bridge.sh\" lidar"
 
 echo "[4/4] Avvio controller..."
 tmux new-window -t "$SESSION" -n controller \

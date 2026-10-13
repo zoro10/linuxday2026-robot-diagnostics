@@ -54,3 +54,29 @@ footer { text-align: center; padding: 25px; font-size: 13px; }
   .connection { text-align: left; }
   .scores, .columns { grid-template-columns: 1fr; }
 }
+
+/* Diagnostic Event Timeline */
+.event-history {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.event-row {
+  padding: 14px 16px;
+  margin: 10px 0;
+  border-left: 4px solid #64748b;
+  background: #101b2d;
+  border-radius: 8px;
+}
+.event-row.fault { border-left-color: #f87171; }
+.event-row.recovery { border-left-color: #4ade80; }
+.event-row strong { display: block; }
+.event-row.fault strong { color: #f87171; }
+.event-row.recovery strong { color: #4ade80; }
+.event-row span {
+  display: block;
+  color: #94a3b8;
+  font-size: 13px;
+  margin-top: 5px;
+}
+.event-row p { margin: 8px 0 0; font-size: 14px; }
