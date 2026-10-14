@@ -4,6 +4,27 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SESSION="pulse1"
 
+SCENARIO="${1:-demo1}"
+
+case "$SCENARIO" in
+    demo1)
+        WORLD_FILE="$ROOT/simulation/worlds/pulse1.sdf"
+        ;;
+    s1)
+        WORLD_FILE="$ROOT/simulation/worlds/pulse1_s1.sdf"
+        ;;
+    *)
+        echo "Scenario non riconosciuto: $SCENARIO"
+        echo "Scenari disponibili: demo1, s1"
+        exit 2
+        ;;
+esac
+
+if [[ ! -f "$WORLD_FILE" ]]; then
+    echo "Mondo Gazebo non trovato: $WORLD_FILE"
+    exit 1
+fi
+
 set +u
 source /opt/ros/jazzy/setup.bash
 set -u
@@ -23,7 +44,7 @@ trap 'echo "Avvio fallito: arresto la sessione"; tmux kill-session -t "$SESSION"
 
 echo "[1/4] Avvio Gazebo..."
 tmux new-session -d -s "$SESSION" -n gazebo \
-  "bash -c 'source /opt/ros/jazzy/setup.bash; exec gz sim -s -r --headless-rendering \"$ROOT/simulation/worlds/pulse1.sdf\" -v 3'"
+  "bash -c 'source /opt/ros/jazzy/setup.bash; exec gz sim -s -r --headless-rendering \"$WORLD_FILE\" -v 3'"
 
 # Mantieni la finestra se Gazebo termina.
 tmux set-window-option   -t "$SESSION:gazebo" remain-on-exit on
@@ -52,6 +73,9 @@ ros2 run ros_gz_sim create \
   --file "$ROOT/simulation/models/pulse1/model.sdf" \
   --name pulse1_proto \
   -x 0 -y 0 -z 0.5
+
+echo "[2b/4] Pubblicazione geometria scenario..."
+python3 "$ROOT/scripts/pulse1_world_metadata.py" "$SCENARIO"
 
 echo "[3/4] Avvio bridge ROS/Gazebo..."
 tmux new-window -t "$SESSION" -n bridge \

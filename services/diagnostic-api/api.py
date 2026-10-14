@@ -16,6 +16,7 @@ DATA = Path(os.getenv(
 
 
 EVENTS = DATA.with_name('pulse1_events.jsonl')
+WORLD = DATA.with_name('pulse1_world.json')
 
 
 def get_events(limit=50):
@@ -100,6 +101,18 @@ class Handler(BaseHTTPRequestHandler):
                 'service': 'pulse1-diagnostic-api',
                 'status': 'OK'
             })
+            return
+
+        if path == '/api/world':
+            try:
+                payload = json.loads(
+                    WORLD.read_text(encoding='utf-8')
+                )
+                self.respond(200, payload)
+            except (OSError, ValueError):
+                self.respond(503, {
+                    'error': 'World metadata unavailable'
+                })
             return
 
         if path == '/api/events':

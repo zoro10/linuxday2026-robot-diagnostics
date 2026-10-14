@@ -92,10 +92,13 @@
                   stroke="#38bdf8" stroke-width="3"
                   stroke-dasharray="6 5"/>
 
-        <!-- Ostacolo SDF: x=4, y=0, dimensioni 0.3 x 3 m -->
-        <rect x="592.75" y="82.5" width="34.5" height="345"
-              fill="#b45309" stroke="#fbbf24" stroke-width="2"/>
-        <text x="643" y="72" fill="#fbbf24" font-size="17">OSTACOLO</text>
+        <!-- Ostacoli generati da /api/world -->
+        <g id="world-obstacles"></g>
+        <text id="world-label"
+              x="24" y="35"
+              fill="#fbbf24" font-size="16">
+          SCENARIO IN CARICAMENTO
+        </text>
 
         <!-- Origine del gruppo = origine del modello PULSE-1 -->
         <g id="rover" visibility="hidden">
@@ -131,7 +134,7 @@
       <div class="panel metric"><span>Orientamento</span><strong id="yaw">—</strong></div>
       <div class="panel metric"><span>Velocità</span><strong id="speed">—</strong></div>
       <div class="panel metric"><span>Distanza LiDAR</span><strong id="distance">—</strong></div>
-      <div class="panel metric"><span>Comportamento</span><strong id="motion">—</strong></div>
+      <div class="panel metric"><span>Stato osservato (dedotto)</span><strong id="motion">—</strong></div>
     </section>
 
     <p id="notice">

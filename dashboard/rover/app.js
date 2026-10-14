@@ -10,6 +10,86 @@ const ORIGIN_Y = 255;
 const LIDAR_X = 34.34;
 const trail = [];
 
+
+async function refreshWorld() {
+  const layer = get("world-obstacles");
+
+  try {
+    const response = await fetch(
+      "/api/world", { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      throw new Error("World API HTTP " + response.status);
+    }
+
+    const world = await response.json();
+
+    if (!Array.isArray(world.obstacles) ||
+        typeof world.scenario !== "string") {
+      throw new Error("Metadati del mondo non validi");
+    }
+
+    const svgNS = layer.namespaceURI;
+    const elements = [];
+
+    for (const obstacle of world.obstacles) {
+      const {x, y, size_x, size_y, yaw_rad} = obstacle;
+
+      if (![x, y, size_x, size_y, yaw_rad].every(valid) ||
+          size_x <= 0 || size_y <= 0) {
+        continue;
+      }
+
+      const cx = ORIGIN_X + x * SCALE;
+      const cy = ORIGIN_Y - y * SCALE;
+      const w = size_x * SCALE;
+      const h = size_y * SCALE;
+      const angle = -yaw_rad * 180 / Math.PI;
+
+      const group = document.createElementNS(svgNS, "g");
+      group.setAttribute(
+        "transform",
+        `translate(${cx} ${cy}) rotate(${angle})`
+      );
+
+      const rect = document.createElementNS(svgNS, "rect");
+      rect.setAttribute("x", -w / 2);
+      rect.setAttribute("y", -h / 2);
+      rect.setAttribute("width", w);
+      rect.setAttribute("height", h);
+      rect.setAttribute("fill", "#b45309");
+      rect.setAttribute("stroke", "#fbbf24");
+      rect.setAttribute("stroke-width", "2");
+
+      group.appendChild(rect);
+      elements.push(group);
+
+      const label = document.createElementNS(svgNS, "text");
+      label.setAttribute("x", cx);
+      label.setAttribute("y", cy - h / 2 - 12);
+      label.setAttribute("text-anchor", "middle");
+      label.setAttribute("fill", "#fbbf24");
+      label.setAttribute("font-size", "15");
+      label.textContent = obstacle.name || "OSTACOLO";
+
+      elements.push(label);
+    }
+
+    layer.replaceChildren(...elements);
+
+    show(
+      "world-label",
+      `SCENARIO: ${world.scenario.toUpperCase()}`
+    );
+
+  } catch (error) {
+    layer.replaceChildren();
+    show("world-label", "SCENARIO NON DISPONIBILE");
+    console.error("World metadata:", error);
+  }
+}
+
 function setController(status) {
   const label = get("controller");
   label.textContent = status;
@@ -80,12 +160,25 @@ async function refresh() {
     }
 
     const speed = valid(p.speed_m_s) ? p.speed_m_s : null;
-    let motion = "FERMO";
-    if (speed === null) motion = "UNKNOWN";
-    else if (Math.abs(speed) > 0.02) motion = "IN MOVIMENTO";
-    else if (laserOk && distance <= 1.2) motion = "OSTACOLO";
+  let motion = "UNKNOWN";
 
-    show("feed", "LIVE · " +
+  if (controllerStatus === "OFFLINE") {
+    motion = "CONTROLLER OFFLINE";
+  } else if (controllerStatus !== "ONLINE") {
+    motion = "CONTROLLER NON VERIFICATO";
+  } else if (speed === null) {
+    motion = "VELOCITA N/D";
+  } else if (Math.abs(speed) > 0.02) {
+    motion = "IN MOVIMENTO";
+  } else if (!laserOk) {
+    motion = "FERMO · LIDAR N/D";
+  } else if (distance <= 1.2) {
+    motion = "FERMO · OSTACOLO RILEVATO";
+  } else {
+    motion = "FERMO";
+  }
+
+  show("feed", "LIVE · " +
       (valid(telemetry.age_seconds)
         ? telemetry.age_seconds.toFixed(1) + " s" : "—"));
     show("x", p.x.toFixed(3) + " m");
@@ -103,4 +196,7 @@ async function refresh() {
 }
 
 refresh();
+refreshWorld();
+
 setInterval(refresh, 2000);
+setInterval(refreshWorld, 5000);
