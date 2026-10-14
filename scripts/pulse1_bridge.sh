@@ -19,8 +19,13 @@ case "${1:-}" in
       '/pulse1/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan' \
       --ros-args -r __node:=pulse1_lidar_bridge
     ;;
+  rear)
+    exec ros2 run ros_gz_bridge parameter_bridge \
+      '/pulse1/scan_rear@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan' \
+      --ros-args -r __node:=pulse1_lidar_rear_bridge
+    ;;
   *)
-    echo "Uso: $0 {main|lidar}" >&2
+    echo "Uso: $0 {main|lidar|rear}" >&2
     exit 2
     ;;
 esac

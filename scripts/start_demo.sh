@@ -9,9 +9,11 @@ SCENARIO="${1:-demo1}"
 case "$SCENARIO" in
     demo1)
         WORLD_FILE="$ROOT/simulation/worlds/pulse1.sdf"
+        MODEL_FILE="$ROOT/simulation/models/pulse1/model.sdf"
         ;;
     s1)
         WORLD_FILE="$ROOT/simulation/worlds/pulse1_s1.sdf"
+        MODEL_FILE="$ROOT/simulation/models/pulse1/model_demo2.sdf"
         ;;
     *)
         echo "Scenario non riconosciuto: $SCENARIO"
@@ -70,7 +72,7 @@ fi
 
 ros2 run ros_gz_sim create \
   --world empty \
-  --file "$ROOT/simulation/models/pulse1/model.sdf" \
+  --file "$MODEL_FILE" \
   --name pulse1_proto \
   -x 0 -y 0 -z 0.5
 
@@ -84,6 +86,12 @@ tmux new-window -t "$SESSION" -n bridge \
 echo "[3b/4] Avvio bridge LiDAR..."
 tmux new-window -t "$SESSION" -n lidar_bridge \
   "bash \"$ROOT/scripts/pulse1_bridge.sh\" lidar"
+
+if [[ "$SCENARIO" == "s1" ]]; then
+    echo "[3c/4] Avvio bridge LiDAR posteriore..."
+    tmux new-window -t "$SESSION" -n lidar_rear_bridge \
+      "bash \"$ROOT/scripts/pulse1_bridge.sh\" rear"
+fi
 
 echo "[4/4] Avvio controller..."
 tmux new-window -t "$SESSION" -n controller \
