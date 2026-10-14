@@ -2,6 +2,7 @@ import math
 import unittest
 
 from pulse1_navigation_fsm import MissionFSM
+from pulse1_scan_logic import front_distance
 
 
 class NavigationTests(unittest.TestCase):
@@ -72,12 +73,56 @@ class NavigationTests(unittest.TestCase):
         )
 
     def test_no_measurement(self):
-        for reading in (None, float("nan"), float("inf")):
+        for reading in (None, float("nan"), float("-inf"), 0.0):
             nav = MissionFSM("AVOID", 0, 0, 0)
             self.assertEqual(
                 nav.update(0, 0, 0, reading).state,
                 "SAFE_STOP"
             )
+
+
+    def test_fsm_front_free(self):
+        for mode in ("STOP", "AVOID"):
+            nav = MissionFSM(mode, 0, 0, 0)
+            self.assertEqual(
+                nav.update(0, 0, 0, math.inf).state,
+                "DRIVE"
+            )
+
+    def test_scan_clear(self):
+        ranges = [math.inf] * 180
+        result = front_distance(
+            ranges, -math.pi / 2, math.pi / 179,
+            0.12, 12.0
+        )
+        self.assertEqual(result, math.inf)
+
+    def test_scan_obstacle(self):
+        ranges = [math.inf] * 180
+        ranges[89] = 1.17
+
+        result = front_distance(
+            ranges, -math.pi / 2, math.pi / 179,
+            0.12, 12.0
+        )
+        self.assertAlmostEqual(result, 1.17)
+
+    def test_scan_invalid(self):
+        ranges = [math.inf] * 180
+        ranges[89] = math.nan
+
+        result = front_distance(
+            ranges, -math.pi / 2, math.pi / 179,
+            0.12, 12.0
+        )
+        self.assertIsNone(result)
+
+    def test_scan_missing_front(self):
+        result = front_distance(
+            [math.inf] * 10,
+            0.8, 0.05, 0.12, 12.0
+        )
+        self.assertIsNone(result)
 
     def test_arrived(self):
         nav = MissionFSM("AVOID", 0, 0, 0)

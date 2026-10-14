@@ -15,12 +15,14 @@ from sensor_msgs.msg import LaserScan
 from std_msgs.msg import String
 
 from pulse1_navigation_fsm import MissionFSM
+from pulse1_scan_logic import front_distance
+from pulse1_stop_policy import stop_velocity
 
 
 class NavigationShadow(Node):
 
-    def __init__(self, mode):
-        super().__init__("pulse1_navigation_shadow")
+    def __init__(self, mode, *, node_name="pulse1_navigation_shadow"):
+        super().__init__(node_name)
 
         # PULSE-1 viene inserito in S1 in (0, 0, 0).
         # La meta rimane X=10, Y=0 anche se il nodo parte
@@ -65,15 +67,13 @@ class NavigationShadow(Node):
         self.odom_at = time.monotonic()
 
     def on_scan(self, msg):
-        values = [
-            d
-            for i, d in enumerate(msg.ranges)
-            if abs(msg.angle_min + i * msg.angle_increment) < 0.35
-            and math.isfinite(d)
-            and msg.range_min <= d <= msg.range_max
-        ]
-
-        self.front = min(values) if values else None
+        self.front = front_distance(
+            msg.ranges,
+            msg.angle_min,
+            msg.angle_increment,
+            msg.range_min,
+            msg.range_max,
+        )
         self.lidar_at = time.monotonic()
 
     def evaluate(self):
@@ -102,6 +102,14 @@ class NavigationShadow(Node):
             lidar_ok=lidar_ok,
         )
 
+        proposed_speed = stop_velocity(
+            decision,
+            self.front,
+            odom_age,
+            lidar_age,
+            mode=self.fsm.mode,
+        )
+
         result = {
             "source": "navigation_shadow",
             "mode": self.fsm.mode,
@@ -111,11 +119,21 @@ class NavigationShadow(Node):
             "goal_y": self.fsm.goal_y,
             "goal_distance_m": decision.goal_distance_m,
             "heading_error_rad": decision.heading_error_rad,
-            "front_m": self.front if lidar_ok else None,
+            "front_m": (
+                self.front
+                if lidar_ok
+                and self.front is not None
+                and math.isfinite(self.front)
+                else None
+            ),
+            "front_clear": bool(
+                lidar_ok and self.front == math.inf
+            ),
             "odom_age_s": round(odom_age, 2)
                 if odom_age is not None else None,
             "lidar_age_s": round(lidar_age, 2)
                 if lidar_age is not None else None,
+            "proposed_linear_m_s": proposed_speed,
             "motor_commands": False,
         }
 

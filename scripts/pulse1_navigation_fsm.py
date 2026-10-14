@@ -72,7 +72,8 @@ class MissionFSM:
         # None, NaN e inf non sono prove di spazio libero.
         if (
             front_m is None
-            or not math.isfinite(front_m)
+            or not isinstance(front_m, (int, float))
+            or math.isnan(front_m)
             or front_m <= 0
         ):
             return self.decide(
