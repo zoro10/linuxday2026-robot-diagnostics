@@ -22,6 +22,31 @@ case "$SCENARIO" in
         ;;
 esac
 
+if (( $# > 2 )); then
+    echo "Uso: $0 [demo1 | s1 [STOP|AVOID]]" >&2
+    exit 2
+fi
+
+if [[ "$SCENARIO" == "s1" ]]; then
+    NAV_MODE="${2:-STOP}"
+
+    case "$NAV_MODE" in
+        STOP|AVOID) ;;
+        *)
+            echo "Modalita non valida: $NAV_MODE" >&2
+            exit 2
+            ;;
+    esac
+
+    if [[ ! -f "$ROOT/scripts/pulse1_navigation_shadow.py" ]]; then
+        echo "Navigatore shadow non trovato" >&2
+        exit 1
+    fi
+elif (( $# > 1 )); then
+    echo "Demo 1 non accetta una modalita di missione" >&2
+    exit 2
+fi
+
 if [[ ! -f "$WORLD_FILE" ]]; then
     echo "Mondo Gazebo non trovato: $WORLD_FILE"
     exit 1
@@ -96,6 +121,13 @@ fi
 echo "[4/4] Avvio controller..."
 tmux new-window -t "$SESSION" -n controller \
   "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_controller.py'"
+
+if [[ "$SCENARIO" == "s1" ]]; then
+    echo "[4b/4] Avvio navigatore shadow: $NAV_MODE"
+
+    tmux new-window -t "$SESSION" -n nav_shadow \
+      "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_navigation_shadow.py --mode \"$NAV_MODE\" --samples 0'"
+fi
 
 trap - ERR
 echo "Demo avviata. Sessione tmux: $SESSION"
