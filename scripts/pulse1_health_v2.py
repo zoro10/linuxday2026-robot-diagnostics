@@ -52,7 +52,8 @@ def evaluate(data, now=None):
     web_status = data.get('web', {}).get('status')
 
     # Robot: controller 30 + sensori 70.
-    controller_ok = nodes.get('pulse1_controller') is True
+    expected = data.get('controller_expected', 'pulse1_controller')
+    controller_ok = nodes.get(expected) is True
     controller_points = 30 if controller_ok else 0
     sensor_points = parts['sensors']['score'] * 2
 
@@ -68,7 +69,7 @@ def evaluate(data, now=None):
     robot_problems = [
         problem for problem in old['problems']
         if problem.startswith(robot_prefixes)
-        or problem == 'Nodo ROS assente: pulse1_controller'
+        or problem == f'Nodo ROS assente: {expected}'
     ]
 
     if not controller_ok:

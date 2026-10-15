@@ -124,9 +124,29 @@ class Pulse1Collector(Node):
             }
 
         discovered = set(self.get_node_names())
+
+        try:
+            world = json.loads(
+                self.output.with_name('pulse1_world.json').read_text()
+            )
+        except (OSError, ValueError):
+            world = {}
+
+        navigation_mode = (
+            world.get('navigation_mode')
+            if world.get('scenario') == 's1'
+            else None
+        )
+
+        expected_controller = (
+            'pulse1_motor_guard_live'
+            if navigation_mode == 'STOP'
+            else 'pulse1_controller'
+        )
+
         nodes = {
             'pulse1_bridge': 'pulse1_bridge' in discovered,
-            'pulse1_controller': 'pulse1_controller' in discovered
+            expected_controller: expected_controller in discovered
         }
 
         healthy = (
@@ -147,6 +167,8 @@ class Pulse1Collector(Node):
             'timestamp_utc': datetime.now(timezone.utc).isoformat(),
             'status': status,
             'nodes': nodes,
+            'controller_expected': expected_controller,
+            'navigation_mode': navigation_mode,
             'topics': result,
             'position': self.position,
             'lidar_front_distance_m': self.front_distance

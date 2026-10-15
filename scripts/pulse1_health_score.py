@@ -65,7 +65,8 @@ def evaluate(data):
 
     # ROS 2: 15 punti per ogni nodo
     nodes = data.get('nodes', {})
-    for name in ('pulse1_bridge', 'pulse1_controller'):
+    expected = data.get('controller_expected', 'pulse1_controller')
+    for name in ('pulse1_bridge', expected):
         if nodes.get(name) is True:
             scores['ros2'] += 15
         else:

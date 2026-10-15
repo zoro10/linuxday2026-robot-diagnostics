@@ -11,6 +11,32 @@ source /opt/ros/jazzy/setup.bash
 set -u
 
 if tmux has-session -t "$SESSION" 2>/dev/null; then
+
+    if tmux list-windows -t "$SESSION" -F '#{window_name}' \
+       | grep -Eq '^(stop_nav|supervisor)$' ||
+       pgrep -f '^python3 scripts/pulse1_motor_guard_live[.]py$' >/dev/null
+    then
+        echo "[0/4] Arresto protetto Demo 2 STOP..."
+
+        reply="$(timeout 8s gz service \
+          -s /world/empty/control \
+          --reqtype gz.msgs.WorldControl \
+          --reptype gz.msgs.Boolean \
+          --timeout 5000 \
+          --req 'pause: true' 2>&1)" || reply=""
+
+        if [[ "$reply" != *"data: true"* ]]; then
+            echo "ERRORE: pausa non confermata" >&2
+            echo "Arresto interrotto: processi di controllo mantenuti attivi." >&2
+            exit 1
+        fi
+
+        tmux kill-window -t "$SESSION:stop_nav" \
+          2>/dev/null || true
+
+        sleep 1
+    fi
+
     echo "[1/4] Arresto controller..."
     tmux kill-window -t "$SESSION:controller" 2>/dev/null || true
 
@@ -20,6 +46,11 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
       geometry_msgs/msg/Twist \
       '{linear: {x: 0.0}, angular: {z: 0.0}}' \
       >/dev/null 2>&1 || true
+fi
+
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    tmux kill-window -t "$SESSION:supervisor" \
+      2>/dev/null || true
 fi
 
 echo "[3/4] Arresto Gazebo con SIGINT..."

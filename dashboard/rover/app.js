@@ -98,6 +98,7 @@ function setController(status) {
 
 function unavailable(reason) {
   get("rover").setAttribute("visibility", "hidden");
+  get("beam").setAttribute("visibility", "hidden");
   show("feed", reason);
   for (const id of ["x", "y", "yaw", "speed", "distance", "motion"]) {
     show(id, "—");
@@ -116,7 +117,9 @@ async function refresh() {
     const odom = data.topics?.odometry || {};
     const lidar = data.topics?.lidar || {};
 
-    const controller = data.nodes?.pulse1_controller;
+    const controllerKey =
+    data.controller_expected || "pulse1_controller";
+  const controller = data.nodes?.[controllerKey];
     const controllerStatus =
       telemetry?.status === "FRESH" &&
       typeof controller === "boolean"
@@ -125,14 +128,19 @@ async function refresh() {
 
     setController(controllerStatus);
 
-    if (telemetry?.status !== "FRESH" ||
-        odom.status !== "OK" ||
-        ![p.x, p.y, p.yaw_rad].every(valid)) {
-      unavailable("TELEMETRIA NON DISPONIBILE");
-      return;
-    }
+    const positionAvailable =
+    [p.x, p.y, p.yaw_rad].every(valid);
 
-    const px = ORIGIN_X + p.x * SCALE;
+  if (!positionAvailable) {
+    unavailable("POSIZIONE NON DISPONIBILE");
+    return;
+  }
+
+  const odomLive =
+    telemetry?.status === "FRESH" &&
+    odom.status === "OK";
+
+  const px = ORIGIN_X + p.x * SCALE;
     const py = ORIGIN_Y - p.y * SCALE;
     const angle = -p.yaw_rad * 180 / Math.PI;
 
@@ -141,7 +149,19 @@ async function refresh() {
       "transform", `translate(${px} ${py}) rotate(${angle})`
     );
 
-    const previous = trail[trail.length - 1];
+    if (!odomLive) {
+    get("beam").setAttribute("visibility", "hidden");
+    show("feed", "ULTIMA POSIZIONE · NON LIVE");
+    show("x", p.x.toFixed(3) + " m");
+    show("y", p.y.toFixed(3) + " m");
+    show("yaw", (-angle).toFixed(1) + "°");
+    show("speed", "—");
+    show("distance", "—");
+    show("motion", "DATI NON AGGIORNATI");
+    return;
+  }
+
+  const previous = trail[trail.length - 1];
     if (!previous || Math.hypot(px - previous[0], py - previous[1]) > 4) {
       trail.push([px, py]);
       if (trail.length > 500) trail.shift();
