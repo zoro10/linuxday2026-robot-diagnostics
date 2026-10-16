@@ -47,10 +47,10 @@ elif (( $# > 1 )); then
     exit 2
 fi
 
-# Avvio AVOID consentito solo con armamento esplicito.
+# Consenso all'avvio dello scenario, non all'armamento del navigatore.
 if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "AVOID" ]]; then
     if [[ "${PULSE1_AVOID_START_ENABLE:-}" != "YES" ]]; then
-        echo "AVOID non armato: avvio negato." >&2
+        echo "AVOID: avvio negato. Richiesto PULSE1_AVOID_START_ENABLE=YES." >&2
         exit 2
     fi
 fi
@@ -205,9 +205,9 @@ if [[ "$SCENARIO" == "s1" ]]; then
         tmux new-window -t "$SESSION" -n avoid_observer \
           "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_avoid_observer.py --continuous'"
 
-        echo "[4b/4] Avvio navigatore rotazione AVOID..."
+        echo "[4b/4] Avvio navigatore rotazione AVOID DISARMATO..."
         tmux new-window -t "$SESSION" -n turn_nav \
-          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_AVOID_TURN_ARM=YES; exec python3 scripts/pulse1_turn_navigator.py --armed'"
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_turn_navigator.py'"
 
         echo "[4c/4] Avvio Motor Guard AVOID..."
         tmux new-window -t "$SESSION" -n controller \
