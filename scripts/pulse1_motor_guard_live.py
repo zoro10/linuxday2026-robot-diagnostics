@@ -12,7 +12,8 @@ from geometry_msgs.msg import Twist
 
 from pulse1_motor_guard_logic import (
     MAX_REQUEST_AGE_S,
-    guarded_velocity,
+    guarded_motion,
+    authorized_request,
 )
 
 
@@ -69,14 +70,9 @@ class MotorGuardLive(Node):
             )
             self.upstream_state = data.get("state")
 
-            self.request_allowed = all((
-                data.get("source") == "stop_dryrun",
-                data.get("mode") == "STOP",
-                data.get("state") == "DRIVE",
-                data.get("odom_ok") is True,
-                data.get("lidar_ok") is True,
-                data.get("motor_commands") is False,
-            ))
+            self.request_allowed = authorized_request(
+                data, "STOP"
+            )
 
         except (ValueError, TypeError):
             pass
@@ -88,8 +84,9 @@ class MotorGuardLive(Node):
             else None
         )
 
-        speed = guarded_velocity(
+        speed, angular = guarded_motion(
             self.request_speed,
+            0.0,  # Modalità STOP: nessuna rotazione
             age,
             active=self.request_allowed,
         )
@@ -109,6 +106,7 @@ class MotorGuardLive(Node):
                 round(age, 3) if age is not None else None
             ),
             "permitted_linear_m_s": speed,
+            "permitted_angular_rad_s": angular,
             "motor_commands": True,
         }
 
@@ -118,6 +116,7 @@ class MotorGuardLive(Node):
 
         cmd = Twist()
         cmd.linear.x = speed
+        cmd.angular.z = angular
         self.motor.publish(cmd)
 
 

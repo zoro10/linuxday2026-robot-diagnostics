@@ -47,6 +47,13 @@ elif (( $# > 1 )); then
     exit 2
 fi
 
+# AVOID reale non ancora integrato con Motor Guard e supervisore.
+# Non avviare il controller originale al suo posto.
+if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "AVOID" ]]; then
+    echo "AVOID non ancora armato: avvio negato." >&2
+    exit 2
+fi
+
 if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "STOP" ]]; then
     for required in         pulse1_stop_dryrun.py         pulse1_motor_guard_live.py         pulse1_gazebo_supervisor.py
     do
