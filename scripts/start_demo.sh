@@ -47,18 +47,34 @@ elif (( $# > 1 )); then
     exit 2
 fi
 
-# AVOID reale non ancora integrato con Motor Guard e supervisore.
-# Non avviare il controller originale al suo posto.
+# Avvio AVOID consentito solo con armamento esplicito.
 if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "AVOID" ]]; then
-    echo "AVOID non ancora armato: avvio negato." >&2
-    exit 2
+    if [[ "${PULSE1_AVOID_START_ENABLE:-}" != "YES" ]]; then
+        echo "AVOID non armato: avvio negato." >&2
+        exit 2
+    fi
 fi
 
-if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "STOP" ]]; then
-    for required in         pulse1_stop_dryrun.py         pulse1_motor_guard_live.py         pulse1_gazebo_supervisor.py
-    do
-        if [[ ! -f "$ROOT/scripts/$required" ]]; then
-            echo "Componente mancante: $required" >&2
+if [[ "$SCENARIO" == "s1" ]]; then
+    required=(
+        pulse1_motor_guard_live.py
+        pulse1_gazebo_supervisor.py
+    )
+
+    if [[ "$NAV_MODE" == "STOP" ]]; then
+        required+=(pulse1_stop_dryrun.py)
+    else
+        required+=(
+            pulse1_avoid_observer.py
+            pulse1_turn_navigator.py
+            pulse1_turn_logic.py
+            pulse1_turn_request.py
+        )
+    fi
+
+    for component in "${required[@]}"; do
+        if [[ ! -f "$ROOT/scripts/$component" ]]; then
+            echo "Componente mancante: $component" >&2
             exit 1
         fi
     done
@@ -134,7 +150,7 @@ p.write_text(json.dumps(data, indent=2) + "\n")
 PULSE1_MODE
 fi
 
-if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "STOP" ]]; then
+if [[ "$SCENARIO" == "s1" ]]; then
     echo "[2c/4] Pausa preventiva Gazebo..."
 
     reply="$(timeout 8s gz service \
@@ -171,29 +187,36 @@ if [[ "$SCENARIO" == "s1" ]]; then
       "bash \"$ROOT/scripts/pulse1_bridge.sh\" rear"
 fi
 
-if [[ "$SCENARIO" == "s1" && "$NAV_MODE" == "STOP" ]]; then
+if [[ "$SCENARIO" == "s1" ]]; then
     echo "[4/4] Avvio supervisore di emergenza..."
     tmux new-window -t "$SESSION" -n supervisor \
       "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_S1_SUPERVISOR_ARM=YES; exec python3 scripts/pulse1_gazebo_supervisor.py --armed'"
 
-    echo "[4a/4] Avvio navigatore STOP..."
-    tmux new-window -t "$SESSION" -n stop_nav \
-      "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_stop_dryrun.py'"
+    if [[ "$NAV_MODE" == "STOP" ]]; then
+        echo "[4a/4] Avvio navigatore STOP..."
+        tmux new-window -t "$SESSION" -n stop_nav \
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_stop_dryrun.py'"
 
-    echo "[4b/4] Avvio Motor Guard..."
-    tmux new-window -t "$SESSION" -n controller \
-      "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_S1_MOTOR_ARM=YES; exec python3 scripts/pulse1_motor_guard_live.py'"
+        echo "[4b/4] Avvio Motor Guard STOP..."
+        tmux new-window -t "$SESSION" -n controller \
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_S1_MOTOR_ARM=YES; exec python3 scripts/pulse1_motor_guard_live.py'"
+    else
+        echo "[4a/4] Avvio osservatore AVOID..."
+        tmux new-window -t "$SESSION" -n avoid_observer \
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_avoid_observer.py --continuous'"
 
+        echo "[4b/4] Avvio navigatore rotazione AVOID..."
+        tmux new-window -t "$SESSION" -n turn_nav \
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_AVOID_TURN_ARM=YES; exec python3 scripts/pulse1_turn_navigator.py --armed'"
+
+        echo "[4c/4] Avvio Motor Guard AVOID..."
+        tmux new-window -t "$SESSION" -n controller \
+          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; export PULSE1_S1_MOTOR_ARM=YES PULSE1_NAV_MODE=AVOID PULSE1_AVOID_MOTOR_ARM=YES; exec python3 scripts/pulse1_motor_guard_live.py'"
+    fi
 else
     echo "[4/4] Avvio controller originale..."
     tmux new-window -t "$SESSION" -n controller \
       "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_controller.py'"
-
-    if [[ "$SCENARIO" == "s1" ]]; then
-        echo "[4b/4] Avvio navigatore shadow: $NAV_MODE"
-        tmux new-window -t "$SESSION" -n nav_shadow \
-          "bash -c 'source /opt/ros/jazzy/setup.bash; cd \"$ROOT\"; exec python3 scripts/pulse1_navigation_shadow.py --mode \"$NAV_MODE\" --samples 0'"
-    fi
 fi
 
 trap - ERR

@@ -13,7 +13,7 @@ set -u
 if tmux has-session -t "$SESSION" 2>/dev/null; then
 
     if tmux list-windows -t "$SESSION" -F '#{window_name}' \
-       | grep -Eq '^(stop_nav|supervisor)$' ||
+       | grep -Eq '^(stop_nav|turn_nav|supervisor)$' ||
        pgrep -f '^python3 scripts/pulse1_motor_guard_live[.]py$' >/dev/null
     then
         echo "[0/4] Arresto protetto Demo 2 STOP..."
@@ -32,6 +32,12 @@ if tmux has-session -t "$SESSION" 2>/dev/null; then
         fi
 
         tmux kill-window -t "$SESSION:stop_nav" \
+          2>/dev/null || true
+
+        tmux kill-window -t "$SESSION:turn_nav" \
+          2>/dev/null || true
+
+        tmux kill-window -t "$SESSION:avoid_observer" \
           2>/dev/null || true
 
         sleep 1
