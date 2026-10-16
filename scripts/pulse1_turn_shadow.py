@@ -102,6 +102,7 @@ class TurnShadow(Node):
         self.pose = None
         self.pose_at = None
         self.imu_at = None
+        self.imu_stamp_s = None
         self.gyro_z = None
 
         self.start_pose = None
@@ -166,24 +167,47 @@ class TurnShadow(Node):
         g = msg.angular_velocity
         a = msg.linear_acceleration
 
-        numbers = (g.x, g.y, g.z, a.x, a.y, a.z)
+        values = (g.x, g.y, g.z, a.x, a.y, a.z)
 
-        if not all(math.isfinite(v) for v in numbers):
+        if not all(math.isfinite(v) for v in values):
             self.imu_at = None
+            self.imu_stamp_s = None
             self.gyro_z = None
+            if self.started_at is not None:
+                self.finished = ("ABORT", "INVALID_IMU")
             return
 
-        if self.started_at is not None and self.imu_at is not None:
-            dt = now - max(self.imu_at, self.started_at)
+        stamp = (
+            float(msg.header.stamp.sec)
+            + float(msg.header.stamp.nanosec) / 1e9
+        )
 
-            if dt > 0.35:
-                self.finished = ("ABORT", "IMU_GAP")
-            elif dt >= 0:
+        if not math.isfinite(stamp) or stamp < 0:
+            self.imu_at = None
+            self.imu_stamp_s = None
+            self.gyro_z = None
+            if self.started_at is not None:
+                self.finished = ("ABORT", "INVALID_IMU_STAMP")
+            return
+
+        if self.imu_stamp_s is not None:
+            dt = stamp - self.imu_stamp_s
+
+            if dt <= 0 or dt > 0.35:
+                self.imu_at = None
+                self.imu_stamp_s = None
+                self.gyro_z = None
+                if self.started_at is not None:
+                    self.finished = ("ABORT", "IMU_STAMP_GAP")
+                return
+
+            if self.started_at is not None:
                 self.gyro_integral += (
                     0.5 * (self.gyro_z + g.z) * dt
                 )
 
         self.gyro_z = g.z
+        self.imu_stamp_s = stamp
         self.imu_at = now
 
     def control(self):
