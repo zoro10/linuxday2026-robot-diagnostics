@@ -50,17 +50,6 @@ function render(data) {
       : simulationState === "RUNNING"
         ? "Simulazione in esecuzione"
         : "Stato Gazebo non verificato");
-  const sim = data.simulation?.state;
-  const simulationState = fresh &&
-    (sim === "PAUSED" || sim === "RUNNING")
-      ? sim : "UNKNOWN";
-  state("simulation-status", simulationState);
-  put("simulation-note",
-    simulationState === "PAUSED"
-      ? "Fisica ferma · sensori potenzialmente STALE"
-      : simulationState === "RUNNING"
-        ? "Simulazione in esecuzione"
-        : "Stato Gazebo non verificato");
 
   put("telemetry", fresh ? "LIVE" : "STALE");
   put("age", "Età telemetria: " +
@@ -118,8 +107,6 @@ async function refresh() {
     render(await response.json());
   } catch (error) {
     put("telemetry", "OFFLINE");
-    state("simulation-status", "UNKNOWN");
-    put("simulation-note", "Stato Gazebo non verificabile");
     state("simulation-status", "UNKNOWN");
     put("simulation-note", "Stato Gazebo non verificabile");
     put("age", "Diagnostic API non raggiungibile");

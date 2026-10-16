@@ -43,10 +43,10 @@ main { padding: 0 24px 24px; }
 .state.unknown { color: #94a3b8; }
 #simulation-status { display: block; margin-top: 8px; }
 #simulation-note { display: block; font-size: 12px; color: #94a3b8; margin-top: 3px; }
-.state.paused { color: #fbbf24; }
-.state.running { color: #4ade80; }
-.state.unknown { color: #94a3b8; }
-#simulation-status { display: block; margin-top: 8px; }
+
+
+
+
 #simulation-note { display: block; font-size: 12px; color: #94a3b8; margin-top: 3px; }
 .metric {
   display: flex; justify-content: space-between;
