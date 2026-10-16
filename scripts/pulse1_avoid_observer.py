@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Acquisizione sensori AVOID. Nessun comando motore."""
 
+import argparse
 import json
 import math
 import time
@@ -250,21 +251,35 @@ class AvoidObserver(Node):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--continuous",
+        action="store_true",
+        help="Pubblica continuamente la percezione AVOID",
+    )
+    args = parser.parse_args()
+
     rclpy.init(args=[])
     node = AvoidObserver()
 
     try:
-        deadline = time.monotonic() + 12
+        if args.continuous:
+            rclpy.spin(node)
+        else:
+            deadline = time.monotonic() + 12
 
-        while node.count < 4 and time.monotonic() < deadline:
-            rclpy.spin_once(node, timeout_sec=0.2)
+            while node.count < 4 and time.monotonic() < deadline:
+                rclpy.spin_once(node, timeout_sec=0.2)
 
-        if node.count < 4:
-            raise SystemExit("Timeout acquisizione observer")
+            if node.count < 4:
+                raise SystemExit("Timeout acquisizione observer")
 
+    except KeyboardInterrupt:
+        pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":
