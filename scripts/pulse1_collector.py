@@ -13,6 +13,7 @@ from rclpy.qos import qos_profile_sensor_data
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan
+from ros_gz_interfaces.msg import WorldStatistics
 from pulse1_linux_metrics import LinuxMetrics
 from pulse1_health_score import evaluate
 from pulse1_health_v2 import evaluate as evaluate_v2
@@ -46,6 +47,8 @@ class Pulse1Collector(Node):
         self.linux_metrics = LinuxMetrics()
         self.web_last_check = 0.0
         self.web_state = {'status': 'NOT_CHECKED'}
+        self.sim_stats_at = None
+        self.sim_paused = None
 
         self.create_subscription(
             Odometry, '/model/pulse1_proto/odometry',
@@ -60,8 +63,19 @@ class Pulse1Collector(Node):
             self.on_scan, qos_profile_sensor_data
         )
 
+        self.create_subscription(
+            WorldStatistics,
+            '/world/empty/stats',
+            self.on_world_stats,
+            qos_profile_sensor_data
+        )
+
         self.create_timer(1.0, self.write_status)
         self.get_logger().info('PULSE-1 collector avviato')
+
+    def on_world_stats(self, msg):
+        self.sim_paused = bool(msg.paused)
+        self.sim_stats_at = time.monotonic()
 
     def mark(self, name):
         now = time.monotonic()
@@ -99,6 +113,19 @@ class Pulse1Collector(Node):
 
     def write_status(self):
         now = time.monotonic()
+
+        stats_age = (
+            now - self.sim_stats_at
+            if self.sim_stats_at is not None else None
+        )
+
+        if (stats_age is None or
+                stats_age < 0 or stats_age > 3.0):
+            simulation_state = 'UNKNOWN'
+        elif self.sim_paused:
+            simulation_state = 'PAUSED'
+        else:
+            simulation_state = 'RUNNING'
         result = {}
 
         for name, data in self.topics.items():
@@ -169,6 +196,13 @@ class Pulse1Collector(Node):
             'nodes': nodes,
             'controller_expected': expected_controller,
             'navigation_mode': navigation_mode,
+            'simulation': {
+                'state': simulation_state,
+                'age_seconds': (
+                    None if stats_age is None
+                    else round(stats_age, 2)
+                )
+            },
             'topics': result,
             'position': self.position,
             'lidar_front_distance_m': self.front_distance

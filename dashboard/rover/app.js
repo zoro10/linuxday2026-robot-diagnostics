@@ -113,6 +113,20 @@ async function refresh() {
 
     const data = await response.json();
     const telemetry = data.diagnostics?.telemetry;
+    const sim = data.simulation?.state;
+    const simulationState =
+      telemetry?.status === "FRESH" &&
+      (sim === "PAUSED" || sim === "RUNNING")
+        ? sim : "UNKNOWN";
+    show("simulation", simulationState);
+    get("simulation").className = simulationState.toLowerCase();
+    const sim = data.simulation?.state;
+    const simulationState =
+      telemetry?.status === "FRESH" &&
+      (sim === "PAUSED" || sim === "RUNNING")
+        ? sim : "UNKNOWN";
+    show("simulation", simulationState);
+    get("simulation").className = simulationState.toLowerCase();
     const p = data.position || {};
     const odom = data.topics?.odometry || {};
     const lidar = data.topics?.lidar || {};
@@ -210,6 +224,10 @@ async function refresh() {
 
   } catch (error) {
     unavailable("API OFFLINE");
+    show("simulation", "UNKNOWN");
+    get("simulation").className = "unknown";
+    show("simulation", "UNKNOWN");
+    get("simulation").className = "unknown";
     setController("UNKNOWN");
     console.error("PULSE-1 Live:", error);
   }

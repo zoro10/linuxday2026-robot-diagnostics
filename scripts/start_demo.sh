@@ -157,6 +157,10 @@ echo "[3/4] Avvio bridge ROS/Gazebo..."
 tmux new-window -t "$SESSION" -n bridge \
   "bash \"$ROOT/scripts/pulse1_bridge.sh\" main"
 
+echo "[3a/4] Avvio bridge statistiche Gazebo..."
+tmux new-window -t "$SESSION" -n stats_bridge \
+  "bash \"$ROOT/scripts/pulse1_bridge.sh\" stats"
+
 echo "[3b/4] Avvio bridge LiDAR..."
 tmux new-window -t "$SESSION" -n lidar_bridge \
   "bash \"$ROOT/scripts/pulse1_bridge.sh\" lidar"

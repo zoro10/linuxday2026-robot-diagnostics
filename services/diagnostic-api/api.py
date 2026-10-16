@@ -158,6 +158,7 @@ class Handler(BaseHTTPRequestHandler):
                     'web': data.get('web', {}),
                     'nodes': data.get('nodes', {}),
                     'navigation_mode': data.get('navigation_mode'),
+                    'simulation': data.get('simulation', {'state': 'UNKNOWN'}),
                     'controller_expected': data.get('controller_expected'),
                     'timestamp_utc': data.get('timestamp_utc'),
                     'lidar_front_distance_m': data.get('lidar_front_distance_m'),

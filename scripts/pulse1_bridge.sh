@@ -14,6 +14,11 @@ case "${1:-}" in
       '/pulse1/imu@sensor_msgs/msg/Imu[gz.msgs.IMU' \
       --ros-args -r __node:=pulse1_bridge
     ;;
+  stats)
+    exec ros2 run ros_gz_bridge parameter_bridge \
+      '/world/empty/stats@ros_gz_interfaces/msg/WorldStatistics[gz.msgs.WorldStatistics' \
+      --ros-args -r __node:=pulse1_stats_bridge
+    ;;
   lidar)
     exec ros2 run ros_gz_bridge parameter_bridge \
       '/pulse1/scan@sensor_msgs/msg/LaserScan[gz.msgs.LaserScan' \
