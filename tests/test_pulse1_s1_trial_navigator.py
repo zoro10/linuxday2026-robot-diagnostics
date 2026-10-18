@@ -50,6 +50,17 @@ def fixture(armed=True):
         shadow=shadow,
         observer_at=now,
         shadow_at=now,
+        guard_at=now,
+        guard={
+            "source": "motor_guard_live",
+            "mode": "AVOID",
+            "guard_state": "BLOCKED",
+            "upstream_state": "HOLD",
+            "avoid_sensor_ready": True,
+            "motor_commands": True,
+            "permitted_linear_m_s": 0.0,
+            "permitted_angular_rad_s": 0.0,
+        },
         diagnostic=Mock(),
         request_pub=Mock() if armed else None,
     )
@@ -86,6 +97,25 @@ class TrialNavigatorTests(unittest.TestCase):
         self.assertEqual(status["request_state"], "HOLD")
         self.assertIsNone(request)
         self.assertFalse(node.gate.started)
+
+    def test_guard_stale_prevents_start(self):
+        node = fixture()
+        node.guard_at = None
+
+        status, request = run(node)
+
+        self.assertFalse(status["sensors_ready"])
+        self.assertEqual(request["state"], "HOLD")
+        self.assertIsNone(node.started_at)
+
+    def test_guard_not_blocked_prevents_start(self):
+        node = fixture()
+        node.guard["guard_state"] = "STALE_REQUEST"
+
+        status, request = run(node)
+
+        self.assertEqual(request["state"], "HOLD")
+        self.assertIsNone(node.started_at)
 
     def test_armed_forward(self):
         node = fixture()

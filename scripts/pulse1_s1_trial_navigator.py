@@ -9,6 +9,7 @@ from pathlib import Path
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
 from std_msgs.msg import String
 
 from pulse1_s1_approach_navigator import observer_healthy
@@ -33,6 +34,8 @@ class TrialNavigator(Node):
         self.shadow = None
         self.observer_at = None
         self.shadow_at = None
+        self.guard = None
+        self.guard_at = None
 
         self.sub_observer = self.create_subscription(
             String, "/pulse1/avoid_observer",
@@ -41,6 +44,11 @@ class TrialNavigator(Node):
         self.sub_shadow = self.create_subscription(
             String, "/pulse1/s1_approach_shadow",
             self.on_shadow, 10,
+        )
+
+        self.sub_guard = self.create_subscription(
+            String, '/pulse1/motor_guard_live',
+            self.on_guard, 10,
         )
 
         self.diagnostic = self.create_publisher(
@@ -81,6 +89,10 @@ class TrialNavigator(Node):
     def on_shadow(self, msg):
         self.shadow = self.receive(msg)
         self.shadow_at = time.monotonic()
+
+    def on_guard(self, msg):
+        self.guard = self.receive(msg)
+        self.guard_at = time.monotonic()
 
     def fresh(self, stamp, now):
         return (
@@ -136,9 +148,23 @@ class TrialNavigator(Node):
             "motor_commands": False,
         }
 
+        guard_ready = (
+            self.fresh(self.guard_at, now)
+            and isinstance(self.guard, dict)
+            and self.guard.get("source") == "motor_guard_live"
+            and self.guard.get("mode") == "AVOID"
+            and self.guard.get("guard_state") == "BLOCKED"
+            and self.guard.get("upstream_state") == "HOLD"
+            and self.guard.get("avoid_sensor_ready") is True
+            and self.guard.get("motor_commands") is True
+            and self.guard.get("permitted_linear_m_s") == 0
+            and self.guard.get("permitted_angular_rad_s") == 0
+        )
+
         ready = (
             observer_ok
             and shadow_ok
+            and guard_ready
             and decision["state"] == "APPROACH"
         )
 
@@ -214,23 +240,35 @@ def main():
             raise SystemExit("Scenario trial non valido")
 
     rclpy.init(args=[])
-    node = TrialNavigator(armed=args.armed)
+    try:
+        node = TrialNavigator(armed=args.armed)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        if rclpy.ok():
+            rclpy.shutdown()
+        return
 
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         if node.request_pub is not None:
             node.gate.terminal_reason = "NAVIGATOR_SHUTDOWN"
 
             for _ in range(5):
+                if not rclpy.ok():
+                    break
                 request = node.gate.step(
                     {}, {}, None, 0.0, armed=False
                 )
                 msg = String()
                 msg.data = json.dumps(request, allow_nan=False)
-                node.request_pub.publish(msg)
+                try:
+                    node.request_pub.publish(msg)
+                except Exception:
+                    if rclpy.ok():
+                        raise
+                    break
                 time.sleep(0.1)
 
         node.destroy_node()
