@@ -15,6 +15,8 @@ from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan
 from geometry_msgs.msg import Twist
 
+from pulse1_s1_watchdog_contract import watchdog_allows_trial
+
 from pulse1_motor_guard_logic import (
     MAX_REQUEST_AGE_S,
     guarded_motion,
@@ -32,6 +34,9 @@ class MotorGuardLive(Node):
         self.request_angular = 0.0
         self.request_allowed = False
         self.upstream_state = None
+        self.request_data = None
+        self.watchdog_status = None
+        self.watchdog_at = None
         self.selected_mode = selected_mode
         self.sensor_at = {}
 
@@ -45,6 +50,11 @@ class MotorGuardLive(Node):
         )
 
         if selected_mode == "AVOID":
+            self.watchdog_sub = self.create_subscription(
+                String, "/pulse1/s1_geofence_watchdog",
+                self.on_watchdog, 10,
+            )
+
             sensors = (
                 (Odometry, "/model/pulse1_proto/odometry", "odom"),
                 (LaserScan, "/pulse1/scan", "front"),
@@ -78,6 +88,18 @@ class MotorGuardLive(Node):
         )
 
         self.create_timer(0.2, self.control)
+
+    def on_watchdog(self, msg):
+        self.watchdog_status = None
+        self.watchdog_at = None
+
+        try:
+            value = json.loads(msg.data)
+            if isinstance(value, dict):
+                self.watchdog_status = value
+                self.watchdog_at = time.monotonic()
+        except (ValueError, TypeError):
+            pass
 
     def on_sensor(self, name, msg):
         if name == "odom":
@@ -125,6 +147,7 @@ class MotorGuardLive(Node):
         self.request_angular = 0.0
         self.request_allowed = False
         self.upstream_state = "INVALID"
+        self.request_data = None
 
         try:
             data = json.loads(msg.data)
@@ -132,6 +155,7 @@ class MotorGuardLive(Node):
             if not isinstance(data, dict):
                 return
 
+            self.request_data = data
             self.request_speed = data.get(
                 "proposed_linear_m_s"
             )
@@ -172,6 +196,39 @@ class MotorGuardLive(Node):
         )
 
         active = self.request_allowed and sensor_ready
+
+        # Il primo avanzamento lineare AVOID richiede un
+        # watchdog separato, recente e esplicitamente armato.
+        # Le rotazioni con velocita' lineare zero non cambiano.
+        if self.selected_mode == "AVOID" and active:
+            linear = self.request_speed
+
+            if (
+                type(linear) not in (int, float)
+                or not math.isfinite(linear)
+                or linear < 0
+            ):
+                active = False
+
+            elif linear > 0:
+                request = self.request_data or {}
+                watchdog_age = (
+                    time.monotonic() - self.watchdog_at
+                    if self.watchdog_at is not None else None
+                )
+
+                active = all((
+                    request.get("state") == "GO_TO_GOAL",
+                    request.get("trial_phase") == "DRIVE",
+                    request.get("trial_reason")
+                        == "LIMITED_FORWARD_TRIAL",
+                    linear <= 0.10,
+                    self.request_angular == 0,
+                    watchdog_allows_trial(
+                        self.watchdog_status,
+                        watchdog_age,
+                    ),
+                ))
 
         speed, angular = guarded_motion(
             self.request_speed,

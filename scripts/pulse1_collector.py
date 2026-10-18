@@ -165,11 +165,7 @@ class Pulse1Collector(Node):
             else None
         )
 
-        expected_controller = (
-            'pulse1_motor_guard_live'
-            if navigation_mode == 'STOP'
-            else 'pulse1_controller'
-        )
+        expected_controller = 'pulse1_motor_guard_live'
 
         nodes = {
             'pulse1_bridge': 'pulse1_bridge' in discovered,
