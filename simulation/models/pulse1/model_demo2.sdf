@@ -36,14 +36,14 @@
       </collision>
       <sensor name="pulse1_imu" type="imu">
         <always_on>true</always_on>
-        <update_rate>10</update_rate>
+        <update_rate>20</update_rate>
         <topic>/pulse1/imu</topic>
         <visualize>false</visualize>
       </sensor>
       <sensor name="pulse1_lidar" type="gpu_lidar">
         <pose>0.45 0 0.60 0 0 0</pose>
         <always_on>true</always_on>
-        <update_rate>5</update_rate>
+        <update_rate>20</update_rate>
         <topic>/pulse1/scan</topic>
         <visualize>false</visualize>
         <ray>
@@ -65,7 +65,7 @@
       <sensor name="pulse1_lidar_rear" type="gpu_lidar">
         <pose>-1.05 0 0.60 0 0 3.141592653589793</pose>
         <always_on>true</always_on>
-        <update_rate>1</update_rate>
+        <update_rate>10</update_rate>
         <topic>/pulse1/scan_rear</topic>
         <visualize>false</visualize>
         <ray>
@@ -215,7 +215,7 @@
       <right_joint>right_wheel_joint</right_joint>
       <wheel_separation>1.25</wheel_separation>
       <wheel_radius>0.3</wheel_radius>
-      <odom_publish_frequency>10</odom_publish_frequency>
+      <odom_publish_frequency>50</odom_publish_frequency>
     </plugin>
   </model>
 </sdf>

@@ -68,7 +68,7 @@ class AvoidObserver(Node):
             String, "/pulse1/avoid_observer", 10
         )
 
-        self.create_timer(1.0, self.report)
+        self.create_timer(0.2, self.report)
 
     def on_odom(self, msg):
         p = msg.pose.pose.position

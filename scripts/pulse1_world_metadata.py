@@ -29,7 +29,7 @@ expected = (
 )
 
 result = subprocess.run(
-    ["pgrep", "-af", "^gz sim -s -r --headless-rendering"],
+    ["pgrep", "-af", "^gz sim -s (-r )?--headless-rendering"],
     capture_output=True,
     text=True,
     check=False,
@@ -41,10 +41,22 @@ commands = [
     if " " in line
 ]
 
-if expected not in commands:
+expected_paused = expected.replace("gz sim -s -r ", "gz sim -s ", 1)
+if commands not in ([expected], [expected_paused]):
     raise SystemExit(
         f"ERRORE: Gazebo non sta eseguendo {world_file.name}"
     )
+
+if commands == [expected_paused]:
+    status = subprocess.run(
+        ["timeout", "8s", "gz", "topic", "-e",
+         "-t", "/world/empty/stats", "-n", "1"],
+        capture_output=True, text=True,
+    )
+    if status.returncode != 0 or not re.search(
+        r"(?m)^paused:\s*true\s*$", status.stdout
+    ):
+        raise SystemExit("ERRORE: Gazebo non confermato PAUSED")
 
 text = world_file.read_text()
 
