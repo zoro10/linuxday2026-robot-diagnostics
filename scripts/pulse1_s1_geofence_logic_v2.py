@@ -1,6 +1,8 @@
 """Geofence S1 V2: STOP nominale verificato, senza alterare la V1."""
 
-from pulse1_s1_geofence_logic import Geofence, EMERGENCY_X_M, finite
+from pulse1_s1_geofence_logic import (
+    Geofence, EMERGENCY_X_M, MAX_Y_M, MAX_YAW_RAD, MAX_TRIAL_S, finite,
+)
 
 STOP_X_M = 0.20
 MAX_STOPPING_S = 2.0
@@ -18,7 +20,7 @@ class GeofenceV2(Geofence):
         return {"action": "PAUSE", "reason": reason}
 
     @staticmethod
-    def _stopped(data, world_paused, world_age_s):
+    def _stopped(data, world_paused, world_age_s, *, allow_stale_request=False):
         guard = data.get("guard")
         cmd = data.get("cmd")
         if world_paused is not True or not finite(world_age_s):
@@ -31,7 +33,10 @@ class GeofenceV2(Geofence):
             guard.get("source") == "motor_guard_live"
             and guard.get("mode") == "AVOID"
             and guard.get("motor_commands") is True
-            and guard.get("guard_state") == "BLOCKED"
+            and guard.get("guard_state") in (
+                ("BLOCKED", "STALE_REQUEST")
+                if allow_stale_request else ("BLOCKED",)
+            )
         ):
             return False
         if not isinstance(cmd, (tuple, list)) or len(cmd) != 2:
@@ -55,10 +60,34 @@ class GeofenceV2(Geofence):
             return {"action": "PAUSE", "reason": self.alarm}
 
         if self.completed:
-            if data.get("active") is True or not self._stopped(
-                data, world_paused, world_age_s
+            pose = data.get("pose")
+            pose_age_s = data.get("pose_age_s")
+
+            # COMPLETE was entered only after fresh odometry.
+            # Gazebo stops publishing odometry while PAUSED.
+            # _stopped() must still confirm fresh PAUSED world
+            # statistics, fresh guard/cmd and zero velocity.
+            safe_pose = (
+                isinstance(pose, (tuple, list))
+                and len(pose) == 3
+                and all(finite(v) for v in pose)
+                and finite(pose_age_s)
+                and 0 <= pose_age_s
+                and STOP_X_M <= pose[0] < EMERGENCY_X_M
+                and abs(pose[1]) <= MAX_Y_M
+                and abs(pose[2]) <= MAX_YAW_RAD
+            )
+
+            if (
+                data.get("active") is True
+                or not safe_pose
+                or not self._stopped(
+                    data, world_paused, world_age_s,
+                    allow_stale_request=True
+                )
             ):
                 return self._alarm("UNSAFE_AFTER_COMPLETE")
+
             return {"action": "COMPLETE", "reason": "TARGET_REACHED"}
 
         if self.stopping_since is not None:
@@ -66,7 +95,21 @@ class GeofenceV2(Geofence):
                 return self._alarm("STOP_TIMEOUT")
             if completion_requested is not True or data.get("active") is True:
                 return self._alarm("STOP_REQUEST_LOST")
-            status = super().step(**{**data, "active": True})
+            # DRIVE has already ended with TARGET_REACHED.
+            # STOPPING has its own monotonic 2-second deadline.
+            # Preserve every V1 safety check except its DRIVE clock.
+            elapsed_s = data.get("elapsed_s")
+            if not finite(elapsed_s) or elapsed_s < 0:
+                return self._alarm("INVALID_STOP_ELAPSED")
+
+            stop_data = {
+                **data,
+                "active": True,
+                "elapsed_s": min(
+                    elapsed_s, MAX_TRIAL_S - 0.001
+                ),
+            }
+            status = super().step(**stop_data)
             if status["action"] != "MONITOR":
                 return status
             if data["pose"][0] < STOP_X_M:
