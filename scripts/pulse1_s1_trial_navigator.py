@@ -27,7 +27,13 @@ class TrialNavigator(Node):
         super().__init__("pulse1_s1_trial_navigator")
 
         self.armed = armed
-        self.gate = TrialGate()
+        self.gate = (
+            TrialGate(max_duration_s=16.0)
+            if armed and os.environ.get(
+                "PULSE1_S1_V5_DRIVE_TIMEOUT"
+            ) == "16"
+            else TrialGate()
+        )
         self.created_at = time.monotonic()
         self.started_at = None
         self.observer = None
@@ -196,6 +202,7 @@ class TrialNavigator(Node):
         status = {
             "source": "s1_trial_navigator",
             "armed": self.armed,
+            "drive_timeout_s": self.gate.max_duration_s,
             "sensors_ready": ready,
             "trial_phase": request["trial_phase"],
             "trial_reason": request["trial_reason"],

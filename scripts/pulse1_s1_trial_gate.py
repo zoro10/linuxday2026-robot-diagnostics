@@ -20,7 +20,11 @@ def finite(value):
 class TrialGate:
     """Una sola prova: dopo STOP/ABORT non si riparte."""
 
-    def __init__(self):
+    def __init__(self, *, max_duration_s=MAX_DURATION_S):
+        if (type(max_duration_s) not in (int, float)
+                or max_duration_s not in (MAX_DURATION_S, 16.0)):
+            raise ValueError("Unsupported Trial duration")
+        self.max_duration_s = max_duration_s
         self.started = False
         self.terminal_reason = None
 
@@ -55,7 +59,7 @@ class TrialGate:
         if (
             not finite(elapsed_s)
             or elapsed_s < 0
-            or elapsed_s >= MAX_DURATION_S
+            or elapsed_s >= self.max_duration_s
         ):
             return abort("TIME_LIMIT")
 

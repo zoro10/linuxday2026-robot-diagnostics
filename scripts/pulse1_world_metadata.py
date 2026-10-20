@@ -42,12 +42,41 @@ commands = [
 ]
 
 expected_paused = expected.replace("gz sim -s -r ", "gz sim -s ", 1)
-if commands not in ([expected], [expected_paused]):
+
+# Accetta anche il percorso relativo alla root del progetto.
+relative_world = world_file.relative_to(ROOT).as_posix()
+
+expected_relative = expected.replace(
+    str(world_file), relative_world, 1
+)
+
+expected_paused_relative = expected_paused.replace(
+    str(world_file), relative_world, 1
+)
+
+valid_commands = (
+    [expected],
+    [expected_paused],
+    [expected_relative],
+    [expected_paused_relative],
+)
+
+if commands not in valid_commands:
     raise SystemExit(
         f"ERRORE: Gazebo non sta eseguendo {world_file.name}"
     )
 
-if commands == [expected_paused]:
+# Con percorso relativo, verifica anche la directory di Gazebo.
+if commands in ([expected_relative], [expected_paused_relative]):
+    pid = result.stdout.splitlines()[0].split(" ", 1)[0]
+    process_cwd = (Path("/proc") / pid / "cwd").resolve()
+
+    if process_cwd != ROOT:
+        raise SystemExit(
+            "ERRORE: directory Gazebo incompatibile con S1"
+        )
+
+if commands in ([expected_paused], [expected_paused_relative]):
     status = subprocess.run(
         ["timeout", "8s", "gz", "topic", "-e",
          "-t", "/world/empty/stats", "-n", "1"],

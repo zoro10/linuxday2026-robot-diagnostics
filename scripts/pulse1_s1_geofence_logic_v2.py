@@ -10,10 +10,31 @@ MAX_REPORT_AGE_S = 0.8
 
 
 class GeofenceV2(Geofence):
-    def __init__(self):
+    def __init__(self, *, max_drive_s=MAX_TRIAL_S):
+        if (type(max_drive_s) not in (int, float)
+                or max_drive_s not in (MAX_TRIAL_S, 16.0)):
+            raise ValueError("Unsupported Geofence DRIVE duration")
         super().__init__()
+        self.max_drive_s = max_drive_s
         self.stopping_since = None
         self.completed = False
+
+    def _drive_step(self, data):
+        # V1 conserva il proprio limite originale.
+        if (data.get("active") is not True
+                or self.max_drive_s == MAX_TRIAL_S):
+            return super().step(**data)
+
+        elapsed = data.get("elapsed_s")
+        if not finite(elapsed) or not 0 <= elapsed < self.max_drive_s:
+            return self._alarm("TRIAL_TIMEOUT")
+
+        # Solo V5: tutti i controlli V1 restano applicati.
+        validated = {
+            **data,
+            "elapsed_s": min(elapsed, MAX_TRIAL_S - 0.001),
+        }
+        return super().step(**validated)
 
     def _alarm(self, reason):
         self.alarm = reason
@@ -120,13 +141,13 @@ class GeofenceV2(Geofence):
             return {"action": "STOPPING", "reason": "TARGET_REACHED"}
 
         if completion_requested is not True:
-            return super().step(**data)
+            return self._drive_step(data)
 
         if data.get("active") is True or self.engaged is not True:
             return self._alarm("UNEXPECTED_COMPLETION")
         if not finite(now_s):
             return self._alarm("INVALID_STOP_CLOCK")
-        status = super().step(**{**data, "active": True})
+        status = self._drive_step({**data, "active": True})
         if status["action"] != "MONITOR":
             return status
         if not STOP_X_M <= data["pose"][0] < EMERGENCY_X_M:

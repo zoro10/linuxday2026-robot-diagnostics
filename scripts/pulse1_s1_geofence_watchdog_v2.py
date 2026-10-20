@@ -92,7 +92,13 @@ class GeofenceObserver(Node):
         self.values = {}
         self.stamps = {}
         self.started_at = None
-        self.geofence = GeofenceV2()
+        self.geofence = (
+            GeofenceV2(max_drive_s=16.0)
+            if armed and os.environ.get(
+                "PULSE1_S1_V5_DRIVE_TIMEOUT"
+            ) == "16"
+            else GeofenceV2()
+        )
         self.armed = armed
         self.last_pause_at = None
         self.stop_pause_future = None
@@ -246,6 +252,7 @@ class GeofenceObserver(Node):
             "source": "s1_geofence_watchdog",
             "mode": "AVOID",
             "armed": self.armed,
+            "drive_timeout_s": self.geofence.max_drive_s,
             "ready_for_motion": (
                 self.armed and active
                 and result["action"] == "MONITOR"
