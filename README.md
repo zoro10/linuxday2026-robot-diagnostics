@@ -1,3 +1,51 @@
+# PULSE-1 — Linux & Robot Diagnostics
+
+**Linux Day 2026 | October 24, 2026**
+
+PULSE-1 is an open-source Linux and robotics diagnostics project
+built with ROS 2 Jazzy and Gazebo Harmonic.
+
+The project combines a simulated mobile rover, sensor monitoring,
+a live web dashboard, navigation diagnostics, Motor Guard,
+and Geofence safety supervision.
+
+## Technology
+
+- Ubuntu 24.04 LTS
+- ROS 2 Jazzy
+- Gazebo Harmonic
+- Python 3
+- Odometry, IMU, front and rear LiDAR
+- ROS 2 / Gazebo bridges
+- Live diagnostics dashboard
+
+## Validation status
+
+**Verified as of October 19, 2026:**
+
+- ROS 2 and Gazebo simulation operational
+- Sensor monitoring and diagnostics operational
+- Persistent ControlWorld stepping validated
+- First bounded rover movement: 3.5 mm
+- Motor Guard authorization demonstrated
+- Geofence monitoring demonstrated during motion
+- Final Gazebo PAUSED and motor commands zero
+- 210 Python tests passed
+
+**Pending validation:**
+
+- Nominal STOP at 20 cm
+- Emergency Geofence behavior at 22 cm
+- Complete navigation scenarios
+- Final demonstration and recovery tests
+
+## Previous development documentation
+
+The original VM diagnostics prototype documentation
+is preserved below for historical reference.
+
+---
+
 # VM Diagnostics Demo
 
 Progetto laboratorio per LinuxDay 2026.
