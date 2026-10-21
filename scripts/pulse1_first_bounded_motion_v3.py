@@ -1,0 +1,442 @@
+#!/usr/bin/env python3
+"""PULSE-1: prova simulata bounded con traccia diagnostica degli interblocchi.
+
+Solo su VM di simulazione ROS 2 Jazzy / Gazebo Harmonic, world empty.
+Non disabilita nessun interblocco; se i prerequisiti non sono soddisfatti esce.
+Codice predisposto offline, NON collaudato sul sistema dell'utente.
+"""
+import json
+import math
+import os
+import signal
+import subprocess
+import sys
+import time
+from pathlib import Path
+
+import rclpy
+from geometry_msgs.msg import Twist
+from nav_msgs.msg import Odometry
+from rclpy.qos import qos_profile_sensor_data
+from ros_gz_interfaces.msg import WorldStatistics
+from std_msgs.msg import String
+
+ROOT = Path.home() / "vmdiag-app"
+WORLD_CONTROL = "/world/empty/control"
+MAX_X_M = 0.025        # arresto del test ben prima dei 0,22 m del geofence
+GOAL_DELTA_M = 0.002  # consideriamo dimostrato il primo avanzamento da 2 mm
+WALL_DEADLINE_S = 14  # include l'attesa dell'handshake; trial startup <=10s
+TRACE_PATH = Path('/tmp/pulse1_first_bounded_motion_v3.jsonl')
+
+
+def service(req, timeout_s=8):
+    p = subprocess.run(
+        ["timeout", f"{timeout_s}s", "gz", "service", "-s", WORLD_CONTROL,
+         "--reqtype", "gz.msgs.WorldControl", "--reptype", "gz.msgs.Boolean",
+         "--timeout", str(max(1000, (timeout_s-1)*1000)), "--req", req],
+        text=True, capture_output=True, timeout=timeout_s + 1,
+    )
+    if p.returncode or "data: true" not in p.stdout:
+        raise RuntimeError(f"Gazebo control {req}: {p.returncode}: {(p.stdout+p.stderr)[-180:]}")
+
+
+class Probe:
+    def __init__(self):
+        self.node = rclpy.create_node("pulse1_first_bounded_motion_probe")
+        self.trace = TRACE_PATH.open('w', buffering=1)
+        self.start_x = None
+        self.first_pause = None
+        self.last_keys = {}
+        self.log('START', {'trace_version': 3})
+        self.msg = {}
+        self.stamps = {}
+        self.stats = None
+        self.stats_stamp = None
+        self.pose = None
+        self.pos_stamp = None
+        self.cmd = None
+        self.cmd_stamp = None
+        self.guard_authorized = False
+        self.watchdog_monitor = False
+        self.positive_cmd = False
+        self.limits_breached = False
+        self.subs = []
+        for name, topic in (
+            ("observer", "/pulse1/avoid_observer"),
+            ("shadow", "/pulse1/s1_approach_shadow"),
+            ("guard", "/pulse1/motor_guard_live"),
+            ("geofence", "/pulse1/s1_geofence_watchdog"),
+            ("trial", "/pulse1/s1_trial_status"),
+            ("request", "/pulse1/avoid_request"),
+        ):
+            self.subs.append(self.node.create_subscription(
+                String, topic, lambda m, key=name: self.on_json(key, m), 10))
+        self.subs.append(self.node.create_subscription(
+            WorldStatistics, "/world/empty/stats", self.on_stats, qos_profile_sensor_data))
+        self.subs.append(self.node.create_subscription(
+            Odometry, "/model/pulse1_proto/odometry", self.on_odom, qos_profile_sensor_data))
+        self.subs.append(self.node.create_subscription(
+            Twist, "/model/pulse1_proto/cmd_vel", self.on_cmd, 10))
+
+    def log(self, name, details):
+        event = {'t_monotonic': round(time.monotonic(), 5), 'type': name, 'data': details}
+        self.trace.write(json.dumps(event, ensure_ascii=False, default=str) + '\n')
+
+    def on_json(self, key, m):
+        try:
+            d = json.loads(m.data)
+            if not isinstance(d, dict):
+                return
+        except (ValueError, TypeError):
+            return
+        self.msg[key] = d
+        self.stamps[key] = time.monotonic()
+        # Registra tutte le transizioni, ma non inonda il file con report ripetuti.
+        fields = {
+            'trial': ('trial_phase', 'trial_reason', 'request_state', 'sensors_ready'),
+            'request': ('trial_phase', 'trial_reason', 'state', 'proposed_linear_m_s'),
+            'guard': ('guard_state', 'upstream_state', 'avoid_sensor_ready', 'permitted_linear_m_s'),
+            'geofence': ('action', 'reason', 'trial_active', 'ready_for_motion'),
+            'observer': ('state', 'odom_ok', 'lidar_ok', 'rear_lidar_ok', 'imu_ok'),
+            'shadow': ('shadow_state', 'shadow_reason', 'sensors_ok'),
+        }.get(key, ())
+        summary = {f: d.get(f) for f in fields}
+        if self.last_keys.get(key) != summary:
+            self.last_keys[key] = summary
+            self.log(key, summary)
+            if key in ('trial', 'geofence', 'request'):
+                print(f'TRANSIZIONE {key}: {summary}', flush=True)
+        if key == "guard" and d.get("guard_state") == "AUTHORIZED" and (d.get("permitted_linear_m_s") or 0) > 0:
+            self.guard_authorized = True
+        if key == "geofence":
+            if d.get("action") == "MONITOR" and d.get("ready_for_motion") is True:
+                self.watchdog_monitor = True
+            if d.get("action") == "PAUSE":
+                self.limits_breached = True
+                if self.first_pause is None:
+                    self.first_pause = {
+                        'reason': d.get('reason'),
+                        'trial': self.msg.get('trial', {}).copy(),
+                        'request': self.msg.get('request', {}).copy(),
+                        'guard': self.msg.get('guard', {}).copy(),
+                        'shadow': self.msg.get('shadow', {}).copy(),
+                        'pose': self.pose,
+                    }
+                    self.log('FIRST_PAUSE_SNAPSHOT', self.first_pause)
+
+    def on_stats(self, m):
+        self.stats = (m.iterations, m.paused, m.sim_time.sec + m.sim_time.nanosec * 1e-9)
+        self.stats_stamp = time.monotonic()
+
+    def on_odom(self, m):
+        self.pose = (float(m.pose.pose.position.x), float(m.pose.pose.position.y))
+        self.pos_stamp = time.monotonic()
+
+    def on_cmd(self, m):
+        self.cmd = (float(m.linear.x), float(m.angular.z))
+        self.cmd_stamp = time.monotonic()
+        if self.cmd[0] > 0:
+            self.positive_cmd = True
+            self.log('POSITIVE_CMD', {'cmd': self.cmd, 'pose': self.pose})
+
+    def spin(self, seconds):
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            rclpy.spin_once(self.node, timeout_sec=min(0.03, max(0, end-time.monotonic())))
+
+    def age(self, key):
+        return time.monotonic()-self.stamps.get(key, -1e10)
+
+    def publishers(self, topic):
+        return self.node.get_publishers_info_by_topic(topic)
+
+    def require_paused(self):
+        if self.stats is None or self.stats[1] is not True:
+            raise RuntimeError("Gazebo non PAUSED")
+
+    def safety(self, first_x):
+        if self.limits_breached:
+            reason = self.msg.get('geofence', {}).get('reason', 'N/D')
+            trial_reason = self.msg.get('trial', {}).get('trial_reason', 'N/D')
+            request_reason = self.msg.get('request', {}).get('trial_reason', 'N/D')
+            raise RuntimeError(f'Geofence PAUSE={reason}; Trial={trial_reason}; Request={request_reason}')
+        if self.pose is not None:
+            x, y = self.pose
+            if not all(math.isfinite(z) for z in (x, y)):
+                raise RuntimeError("Odometria non finita")
+            if x >= min(MAX_X_M, first_x + MAX_X_M) or abs(y) >= 0.06:
+                raise RuntimeError(f"Limite prudenziale raggiunto: x={x:.4f} y={y:.4f}")
+
+    def step(self, n, first_x=None):
+        """Completa lo step solo dopo *entrambi* gli ACK: fisica e gz CLI.
+
+        L'ACK del servizio può arrivare prima O DOPO PAUSED al target.
+        Mai rilanciare uno step se la chiamata precedente è ancora attiva.
+        """
+        self.require_paused()
+        start_i, _, start_t = self.stats
+        target = start_i + n
+        p = subprocess.Popen(
+            ["timeout", "35s", "gz", "service", "-s", WORLD_CONTROL,
+             "--reqtype", "gz.msgs.WorldControl", "--reptype", "gz.msgs.Boolean",
+             "--timeout", "32000", "--req", f"pause: true, multi_step: {n}"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        )
+        cli_ok = False
+        physics_ok = False
+        try:
+            deadline = time.monotonic() + 37
+            while time.monotonic() < deadline:
+                self.spin(0.03)
+                if first_x is not None:
+                    self.safety(first_x)
+                if self.stats:
+                    iters, paused, _ = self.stats
+                    if iters > target:
+                        raise RuntimeError("Gazebo ha superato gli step autorizzati")
+                    if iters == target and paused is True:
+                        physics_ok = True
+                    elif physics_ok and paused is not True:
+                        raise RuntimeError("Gazebo ha ripreso dopo il target")
+                if not cli_ok and p.poll() is not None:
+                    out, _ = p.communicate(timeout=1)
+                    if p.returncode != 0 or "data: true" not in out:
+                        raise RuntimeError(
+                            f"Gazebo service senza ACK: rc={p.returncode}: {out[-180:]}"
+                        )
+                    cli_ok = True
+                if physics_ok and cli_ok:
+                    return (self.stats[2] - start_t) / n
+            raise RuntimeError(
+                f"Timeout step: fisica_al_target={physics_ok}, servizio_ok={cli_ok}"
+            )
+        finally:
+            if p.poll() is None:
+                p.kill()
+                p.communicate()
+
+
+def run(probe):
+    print("=== PREFLIGHT: SOLO SIMULAZIONE ===", flush=True)
+    if not (ROOT / "runtime/pulse1_world.json").is_file():
+        raise RuntimeError("Metadata world mancanti")
+    world = json.loads((ROOT / "runtime/pulse1_world.json").read_text())
+    if (world.get("scenario"), world.get("navigation_mode")) != ("s1", "AVOID"):
+        raise RuntimeError("Scenario diverso da S1/AVOID")
+
+    deadline = time.monotonic()+8
+    while time.monotonic()<deadline:
+        probe.spin(0.10)
+        if (probe.stats and probe.stats[1] is True
+            and len(probe.publishers("/model/pulse1_proto/cmd_vel")) == 1
+            and not probe.publishers("/pulse1/avoid_request")
+            and probe.msg.get("geofence", {}).get("armed") is True
+            and not probe.publishers("/pulse1/s1_trial_status")):
+            break
+    else:
+        raise RuntimeError("DDS/Geofence/Trial preflight fallito")
+
+    # Attendere un Twist reale prima di controllarne lo zero.
+    deadline = time.monotonic() + 3.0
+    while probe.cmd is None and time.monotonic() < deadline:
+        probe.spin(0.10)
+    if probe.cmd is None:
+        raise RuntimeError("Cmd_vel iniziale non ricevuto")
+    if probe.cmd_stamp is None or time.monotonic() - probe.cmd_stamp > 0.5:
+        raise RuntimeError("Cmd_vel iniziale scaduto")
+    if abs(probe.cmd[0]) + abs(probe.cmd[1]) > 1e-6:
+        raise RuntimeError(f"Cmd_vel iniziale non zero: {probe.cmd}")
+    gf = probe.msg.get('geofence', {})
+    if gf.get('action') != 'WAIT' or gf.get('reason') != 'NOT_STARTED':
+        raise RuntimeError(f'Geofence latched/non pronto: {gf.get("action")}/{gf.get("reason")}; RESET controllato necessario')
+    guard = probe.msg.get('guard', {})
+    if guard.get('permitted_linear_m_s') != 0 or guard.get('permitted_angular_rad_s') != 0:
+        raise RuntimeError('Motor Guard non a zero prima del test')
+    initial_pose = probe.pose
+    if initial_pose is not None and initial_pose[0] >= 0.015:
+        raise RuntimeError("Posizione iniziale troppo vicina al limite prudenziale")
+    # Nessuna richiesta di step del test precedente deve essere ancora in esecuzione.
+    stable_iterations = probe.stats[0]
+    probe.spin(0.6)
+    if (probe.stats is None or probe.stats[1] is not True
+            or probe.stats[0] != stable_iterations):
+        raise RuntimeError("Gazebo non stabile in PAUSE; nessun nuovo step")
+
+    print("=== RISCALDAMENTO SENSORI DISARMED ===", flush=True)
+    for i in range(2):
+        dt = probe.step(1000)
+        probe.spin(0.2)
+        o, sh, g = (probe.msg.get(n, {}) for n in ("observer", "shadow", "guard"))
+        ready = (o.get("state") == "SENSOR_READY"
+                 and sh.get("sensors_ok") is True
+                 and g.get("avoid_sensor_ready") is True
+                 and probe.age("observer") < 0.5
+                 and probe.age("shadow") < 0.4
+                 and probe.age("guard") < 0.4
+                 and probe.pose is not None
+                 and probe.pos_stamp is not None
+                 and time.monotonic() - probe.pos_stamp < 0.4)
+        print(f"warmup {i+1}: observer={o.get('state')} shadow={sh.get('sensors_ok')} guard={g.get('avoid_sensor_ready')}", flush=True)
+        ages = {
+            "observer_s": round(probe.age("observer"), 3),
+            "shadow_s": round(probe.age("shadow"), 3),
+            "guard_s": round(probe.age("guard"), 3),
+            "odom_s": (
+                round(time.monotonic() - probe.pos_stamp, 3)
+                if probe.pos_stamp is not None else None
+            ),
+        }
+
+        print("FRESCHEZZA:", ages, flush=True)
+
+        if ready:
+            break
+
+        if (
+            o.get("state") == "SENSOR_READY"
+            and sh.get("sensors_ok") is True
+            and g.get("avoid_sensor_ready") is True
+        ):
+            raise RuntimeError(
+                f"Stati pronti ma freschezza insufficiente: {ages}"
+            )
+    else:
+        raise RuntimeError("Sensori non simultaneamente pronti, nessun armamento")
+
+    first_x = probe.pose[0]
+    probe.start_x = first_x
+    if not -0.03 <= first_x <= 0.015:
+        raise RuntimeError(f"X iniziale non sicura: {first_x:.4f}")
+    if dt <= 0 or dt > 0.05:
+        raise RuntimeError(f"Passo temporale inatteso: {dt}")
+
+    if "--warmup-only" in sys.argv:
+        if probe.msg.get("geofence", {}).get("action") != "WAIT":
+            raise RuntimeError("Geofence non WAIT dopo il warmup disarmato")
+        if probe.publishers("/pulse1/avoid_request"):
+            raise RuntimeError("Publisher Trial inatteso nel warmup disarmato")
+        print("=== WARMUP-ONLY SUPERATO: TRIAL NON ARMATO ===", flush=True)
+        return True
+
+    print(f"=== ARMAMENTO TRIAL S1; x0={first_x:.4f} m, dt={dt:.6f} s/step ===", flush=True)
+    log = open("/tmp/pulse1_first_bounded_motion.log", "w")
+    env = os.environ.copy()
+    env["PULSE1_S1_TRIAL_ARM"] = "YES"
+    trial = subprocess.Popen(
+        [sys.executable, "-u", str(ROOT / "scripts/pulse1_s1_trial_navigator.py"), "--armed"],
+        cwd=str(ROOT), env=env, stdout=log, stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    try:
+        deadline = time.monotonic()+WALL_DEADLINE_S
+        reached = False
+        for i in range(160):
+            if time.monotonic() >= deadline:
+                print("TIMEOUT globale: arresto prudenziale", flush=True)
+                break
+            if trial.poll() is not None:
+                print(f"Trial terminato: rc={trial.returncode}", flush=True)
+                break
+            probe.safety(first_x)
+            t = probe.msg.get("trial", {})
+            if t.get('trial_reason') in (
+                'STARTUP_TIMEOUT', 'NAVIGATOR_SHUTDOWN', 'REQUEST_DENIED',
+                'INVALID_POSE', 'TIME_LIMIT', 'ARM_LOST', 'UNSAFE_START_POSE',
+            ):
+                print(f"Trial terminale: {t.get('trial_reason')}", flush=True)
+                break
+            # Calcola un budget massimo di 5 mm teorici per richiesta,
+            # limitato anche a 50 iterazioni; controlla X dopo ogni blocco.
+            n = max(1, min(50, int(0.005 / (0.10*dt))))
+            probe.step(n, first_x)
+            probe.spin(0.04)
+            probe.safety(first_x)
+            if probe.pose is not None and probe.pose[0] >= first_x+GOAL_DELTA_M:
+                reached = True
+                break
+        print('=== RISULTATO MOVIMENTO ===', flush=True)
+        print(f"x0={first_x:.5f} x_final={probe.pose[0] if probe.pose else None}", flush=True)
+        print(f"Trial phase={probe.msg.get('trial',{}).get('trial_phase')}", flush=True)
+        print(f"Guard autorizzato osservato={probe.guard_authorized}", flush=True)
+        print(f"Geofence MONITOR osservato={probe.watchdog_monitor}", flush=True)
+        print(f"Comando positivo osservato={probe.positive_cmd}", flush=True)
+        print(f"Avanzamento misurato >=2mm={reached}", flush=True)
+        return reached and probe.guard_authorized and probe.watchdog_monitor and probe.positive_cmd
+    finally:
+        if trial.poll() is None:
+            os.killpg(trial.pid, signal.SIGINT)
+            try:
+                trial.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                os.killpg(trial.pid, signal.SIGTERM)
+                try:
+                    trial.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    os.killpg(trial.pid, signal.SIGKILL)
+                    trial.wait(timeout=1)
+        log.close()
+
+
+def main():
+    rclpy.init()
+    probe = Probe()
+    valid = False
+    try:
+        valid = run(probe)
+    except Exception as exc:
+        print('STOP:', exc, flush=True)
+        probe.log('STOP_EXCEPTION', {'exception': str(exc), 'pose': probe.pose})
+    finally:
+        before = probe.stats
+        probe.spin(0.4)
+
+        paused_stable = (
+            before is not None
+            and probe.stats is not None
+            and before[1] is True
+            and probe.stats[1] is True
+            and before[0] == probe.stats[0]
+            and probe.stats_stamp is not None
+            and time.monotonic() - probe.stats_stamp < 0.8
+        )
+
+        if paused_stable:
+            print("PAUSE: già verificata e stabile", flush=True)
+        else:
+            try:
+                service("pause: true", timeout_s=8)
+            except Exception as exc:
+                print("ALLARME: PAUSE service non confermato:", exc, flush=True)
+        # Lascia tempo al Motor Guard di pubblicare un cmd_vel zero anche se
+        # il Trial è cessato forzatamente (richiesta stale dopo 0,7 s).
+        probe.spin(1.5)
+        paused = (probe.stats is not None
+                  and probe.stats[1] is True
+                  and probe.stats_stamp is not None
+                  and time.monotonic() - probe.stats_stamp < 1.0)
+        zero_cmd = (probe.cmd is not None
+                    and abs(probe.cmd[0]) < 1e-8
+                    and abs(probe.cmd[1]) < 1e-8
+                    and probe.cmd_stamp is not None
+                    and time.monotonic()-probe.cmd_stamp < 0.5)
+        zero_guard = (probe.msg.get("guard", {}).get("permitted_linear_m_s") == 0
+                      and probe.msg.get("guard", {}).get("permitted_angular_rad_s") == 0)
+        print(f'=== FINALE: PAUSED={paused}, cmd_vel_zero={zero_cmd}, guard_zero={zero_guard} ===', flush=True)
+        print(f'POSIZIONE: x0={probe.start_x}, x_ultima={probe.pose[0] if probe.pose else None}, age_odom={round(time.monotonic()-probe.pos_stamp, 2) if probe.pos_stamp else None}s', flush=True)
+        print(f'ULTIMO TRIAL: {probe.msg.get("trial", {})}', flush=True)
+        print(f'PRIMO ALLARME: {probe.first_pause}', flush=True)
+        print(f'TRACCIA: {TRACE_PATH}', flush=True)
+        probe.log('FINAL', {'paused': paused, 'cmd_vel_zero': zero_cmd,
+                            'guard_zero': zero_guard, 'start_x': probe.start_x,
+                            'end_pose': probe.pose, 'first_pause': probe.first_pause})
+        if not (paused and zero_cmd and zero_guard):
+            valid = False
+            print("ALLARME: arresto non completamente verificato", flush=True)
+        probe.node.destroy_node()
+        probe.trace.close()
+        rclpy.shutdown()
+    raise SystemExit(0 if valid else 1)
+
+
+if __name__ == "__main__":
+    main()
