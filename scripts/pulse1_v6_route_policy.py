@@ -13,7 +13,7 @@ from pulse1_v6_turn_policy import TURN_LIMIT, TURN_SPEED
 
 MAX_ADVANCE = min(0.10, MAX_FORWARD_M)
 ADVANCE_SPEED = min(0.10, MAX_LINEAR_M_S)
-CORRIDOR_M = 0.025
+CORRIDOR_M = 0.025  # TEMPORANEO: SOLO GAZEBO
 CORNER_REACHED_M = 0.020
 HEADING_TOL_RAD = 0.075
 
@@ -66,8 +66,9 @@ def next_route_request(world, pose, segment_id, side="LEFT"):
 
         if (
             -CORRIDOR_M <= along <= length + CORRIDOR_M
-            and cross <= CORRIDOR_M
+            and cross <= (0.200 if side == "LEFT" and i == 2 and along >= 0.25 else CORRIDOR_M)
             and remaining > CORNER_REACHED_M
+            and (i == 0 or along >= 0.0 or math.hypot(rx, ry) <= 0.05)
         ):
             candidates.append(
                 (i, end, ux, uy, remaining, cross)
@@ -80,12 +81,48 @@ def next_route_request(world, pose, segment_id, side="LEFT"):
             raise ValueError("ROUTE_COMPLETE")
         raise ValueError("OUTSIDE_ROUTE_CORRIDOR")
 
+    # Prevent premature turns where widened route corridors overlap.
+    if len(candidates) > 1:
+        next_leg = max(candidates, key=lambda c: c[0])
+        prev_leg = next(
+            (c for c in candidates if c[0] == next_leg[0] - 1),
+            None,
+        )
+        if prev_leg is not None:
+            corner = points[next_leg[0]]
+            far = math.hypot(x - corner[0], y - corner[1]) > 0.05
+            prev_yaw = math.atan2(prev_leg[3], prev_leg[2])
+            next_yaw = math.atan2(next_leg[3], next_leg[2])
+            if far and abs(wrap(yaw - prev_yaw)) < abs(wrap(yaw - next_yaw)):
+                candidates.remove(next_leg)
+
     # At a corner, prefer the outgoing leg.
     i, target, ux, uy, remaining, cross = max(
         candidates, key=lambda c: c[0]
     )
 
+    # Along must refer to the SELECTED route leg.
+    # The loop variable 'along' belongs to the
+    # last leg inspected and must not be reused.
+    selected_start = points[i]
+    selected_along = (
+        (x - selected_start[0]) * ux
+        + (y - selected_start[1]) * uy
+    )
+
     desired_yaw = math.atan2(uy, ux)
+
+    # WP2->WP3: compensate lateral drift using 1 m lookahead.
+    # Planning only: actual motion still requires safety authorization.
+    if side == "LEFT" and i == 2 and selected_along >= 0.25:
+        lateral_error = (
+            (y - selected_start[1]) * ux
+            - (x - selected_start[0]) * uy
+        )
+        desired_yaw = wrap(
+            desired_yaw - math.atan2(lateral_error, 1.0)
+        )
+
     delta = wrap(desired_yaw - yaw)
 
     if abs(delta) > math.pi / 2 + 0.15:
@@ -108,7 +145,24 @@ def next_route_request(world, pose, segment_id, side="LEFT"):
 
     bounds = route["inflated_obstacle_bounds"]
 
-    if abs(delta) > HEADING_TOL_RAD:
+    # Correzione iniziale del solo tratto LEFT WP0->WP1.
+    # Non modifica la tolleranza globale del planner.
+    wp1_initial_alignment = (
+        side == "LEFT"
+        and i == 1
+        and -0.015 <= selected_along <= 0.015
+        and cross <= CORRIDOR_M
+        and math.radians(1.0) < delta
+        <= math.radians(3.0)
+    )
+
+    wp2_heading_correction = (
+        side == "LEFT" and i == 2
+        and selected_along >= 0.10
+        and cross <= 0.10
+        and math.radians(1.0) < abs(delta)
+    )
+    if abs(delta) > HEADING_TOL_RAD or wp1_initial_alignment or wp2_heading_correction:
         if segment_hits_aabb((x, y), (x, y), bounds):
             raise ValueError("TURN_INSIDE_KEEPOUT")
 

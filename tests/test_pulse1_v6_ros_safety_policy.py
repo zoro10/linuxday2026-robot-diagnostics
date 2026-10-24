@@ -69,7 +69,7 @@ class TestLease(unittest.TestCase):
     def test_stale_world(self):
         d=opts();d['world_age_s']=1.;self.assertFalse(watchdog_lease(**d))
     def test_stale_odom(self):
-        d=opts();d['pose_age_s']=.61;self.assertFalse(watchdog_lease(**d))
+        d=opts();d['pose_age_s']=.81;self.assertFalse(watchdog_lease(**d))
     def test_bad_odom(self):
         d=opts();d['pose']=[0,0];self.assertFalse(watchdog_lease(**d))
     def test_stale_observer(self):

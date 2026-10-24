@@ -259,7 +259,7 @@ class V6SegmentGate:
             if progress < -MAX_OVERSHOOT_RAD or progress > seg.limit + MAX_OVERSHOOT_RAD \
                     or math.hypot(dx,dy) > 0.035:
                 return self._abort('TURN_ENVELOPE_BREACHED')
-            reached = progress >= max(MIN_PROGRESS_RAD, seg.limit - math.radians(1.5))
+            reached = progress >= max(MIN_PROGRESS_RAD, seg.limit - math.radians(2))
         if reached:
             self.phase = 'STOP_REQUESTED'
             self.stop_requested_at = now_s

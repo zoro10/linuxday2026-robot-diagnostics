@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""PULSE-1 V6: only first 10 cm, manual approval and three-arm fail closed.
+"""PULSE-1 V6: one explicitly authorized segment, fail-closed.
 
-No whole-mission automation. No ROS actuation in default --plan mode.
-DO NOT run --execute until the V5->V6 handover has been independently verified.
+The sequencer can iterate certified stops; the executor never rearms.
+No ROS actuation in default --plan mode.
 """
 import argparse
 import json
@@ -17,6 +17,7 @@ from pulse1_v6_single_segment_policy import (
     should_emit_nominal_hold,
 )
 from pulse1_v6_safety_contract import observer_healthy, pose_valid
+from pulse1_v6_sensor_preflight import check_sensor_gate
 from pulse1_v6_segment_fsm import V6SegmentGate
 from pulse1_v6_route_policy import next_route_request
 from pulse1_v6_turn_policy import (
@@ -49,8 +50,15 @@ def precision_waypoint0_request(world, gz_pose, odom_pose, segment_id, side):
     gx, gy, gyaw = gz_pose
     ox, oy, oyaw = odom_pose
 
+    from pulse1_waypoint_plan import build_route
+    corner_x = float(
+        build_route(world, side)['waypoints'][0][0]
+    )
+    if not math.isfinite(corner_x):
+        raise ValueError('PRECISION_CORNER_INVALID')
+
     if not (
-        2.33 <= gx <= 2.35
+        corner_x - 0.04 <= gx <= corner_x - 0.01
         and abs(gy) <= 0.01
         and abs(oy) <= 0.01
         and abs(gyaw) <= 0.035
@@ -174,17 +182,37 @@ def warmup_overrun_permitted(
         and guard.get('nominal_stop_latched') is False
         and guard.get('emergency_latched') is False
         and geofence.get('action') == 'WAIT'
-        and geofence.get('reason') == 'REARM_VERIFIED'
+        and (geofence.get('reason') == 'REARM_VERIFIED'
+             or ((
+                 (os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP') == 'YES'
+                  and os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP_OPERATOR') == 'YES')
+                 or (os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP') == 'YES'
+                     and os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP_OPERATOR') == 'YES')
+                 ) and geofence.get('reason') == 'NOT_STARTED'
+                 and guard.get('expected_next_segment_id') in (None, '')
+                 and guard.get('segment_id') in (None, '')
+                 and geofence.get('segment_id') in (None, '')))
         and supervisor.get('state') == 'HEALTHY'
     ):
         return False
 
     expected = guard.get('expected_next_segment_id')
-    if not (
+    normal_rearm = (
         isinstance(expected, str)
         and 8 <= len(expected) <= 64
         and geofence.get('rearm_next_segment_id') == expected
-    ):
+        and geofence.get('reason') == 'REARM_VERIFIED'
+    )
+    new_session_bootstrap = (
+        ((os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP') == 'YES'
+          and os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP_OPERATOR') == 'YES')
+         or (os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP') == 'YES'
+             and os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP_OPERATOR') == 'YES'))
+        and expected in (None, '')
+        and geofence.get('rearm_next_segment_id') in (None, '')
+        and geofence.get('reason') == 'NOT_STARTED'
+    )
+    if not (normal_rearm or new_session_bootstrap):
         return False
 
     return all(
@@ -309,6 +337,11 @@ def execute():
                 m=String();m.data=json.dumps(self.req,allow_nan=False)
                 self.pub.publish(m);self.last_pub=time.monotonic()
         def poll(self,seconds=.02):
+            # Refresh the existing request before processing ROS callbacks.
+            # Keep the 50 ms timer as an independent fallback.
+            # Never publish when no request is active.
+            if self.req is not None and time.monotonic() - self.last_pub >= 0.05:
+                self.heartbeat()
             rclpy.spin_once(self,timeout_sec=seconds)
             gf=self.val.get('watchdog')
             guard=self.val.get('guard')
@@ -472,9 +505,22 @@ def execute():
                        {'pulse1_v6_motor_guard','pulse1_v6_geofence_watchdog'} else -1),
                     service_ready=self.client.service_is_ready(),
                     supervisor=self.val.get('supervisor'),supervisor_age=self.age('supervisor'))
-            if not check():
-                raise RuntimeError('PREFLIGHT_DENIED: V6 armed/exclusive, V5 absent, paused, zero and supervisor required')
-            return check
+            # ROS discovery is asynchronous. All original start_ok
+            # conditions must remain true for one continuous second.
+            # Never relax an individual safety predicate.
+            deadline = time.monotonic() + 8.0
+            stable_since = None
+            while time.monotonic() < deadline:
+                self.poll()
+                if check():
+                    if stable_since is None:
+                        stable_since = time.monotonic()
+                    if time.monotonic() - stable_since >= 1.0:
+                        print('PREFLIGHT STABLE: 1.0s', flush=True)
+                        return check
+                else:
+                    stable_since = None
+            raise RuntimeError('PREFLIGHT_DENIED: V6 armed/exclusive, V5 absent, paused, zero and supervisor required')
 
     rclpy.init(args=[])
     runner=None; status='UNSTARTED'; phase='BOOT'; old_req=None
@@ -482,6 +528,53 @@ def execute():
         runner=Runner()
         check=runner.preflight()
         print('PRECHECK OK: V6 exclusive / old guard absent / pause / zero / V6 supervisor',flush=True)
+        # Special incident: an old, pre-motion rearm was abandoned after a
+        # planner rejection. Neither that segment nor its signed plan can be
+        # reused. Check the clean NEW session and physical pose BEFORE warmup.
+        pending_mode = os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP') == 'YES'
+        abort_mode = os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP') == 'YES'
+        if pending_mode and abort_mode:
+            raise RuntimeError('COLD_ROUTE_MODES_CONFLICT')
+        pending_pre_pose = None
+        pending_audit = None
+        if pending_mode:
+            from pulse1_v6_pending_resume_policy import (
+                gazebo_pose_from_topic, verify_pending_bootstrap,
+            )
+            if os.environ.get('PULSE1_V6_PENDING_BOOTSTRAP_OPERATOR') != 'YES':
+                raise RuntimeError('PENDING_OPERATOR_CONSENT_MISSING')
+            if any(os.environ.get(k) == 'YES' for k in (
+                    'PULSE1_V6_ROUTE_NEXT', 'PULSE1_V6_TURN',
+                    'PULSE1_V6_RESUME_FIRST_LEG', 'PULSE1_V6_PRECISION_WP0')):
+                raise RuntimeError('PENDING_ROUTE_MODE_CONFLICT')
+            audit_file = os.environ.get('PULSE1_V6_PENDING_AUDIT', '')
+            if not audit_file:
+                raise RuntimeError('PENDING_AUDIT_REQUIRED')
+            audit_path = Path(audit_file).resolve()
+            if not audit_path.is_file() or ROOT not in audit_path.parents:
+                raise RuntimeError('PENDING_AUDIT_PATH_DENIED')
+            try:
+                pending_audit = json.loads(audit_path.read_text())
+            except (OSError, ValueError) as exc:
+                raise RuntimeError('PENDING_AUDIT_READ_FAILED') from exc
+            pending_pre_pose = gazebo_pose_from_topic()
+            pose_returned_at = time.monotonic()
+            runner.until(lambda: (
+                runner.seen.get('stats', 0.0) >= pose_returned_at
+                and all(runner.age(k) is not None and runner.age(k) < age
+                        for k, age in (('stats', .5), ('guard', .5),
+                                       ('watchdog', .5), ('supervisor', .7),
+                                       ('cmd', .5)))
+            ), 5.0, 'PENDING_PREWARMUP_TELEMETRY')
+            if not check():
+                raise RuntimeError('PENDING_PREWARMUP_PREFLIGHT_CHANGED')
+            verify_pending_bootstrap(
+                pending_audit, runner.val.get('guard'),
+                runner.val.get('watchdog'), runner.val.get('supervisor'),
+                runner.stats()[1], runner.val.get('cmd'), pending_pre_pose,
+            )
+            print('PENDING BOOTSTRAP PREWARMUP: clean and pose verified',
+                  flush=True)
         dt=None
         for count in (250,250,500,1000):
             if not check(): raise RuntimeError('WARMUP_PREFLIGHT_CHANGED')
@@ -548,9 +641,206 @@ def execute():
                     flush=True
                 )
             else:
-                request = next_route_request(
-                    load_world(WORLD), origin, next_id, side
+                # Signed, time-bounded Gazebo wheel-axle snapshot supplied by
+                # the sequencer AFTER the rearm pose has been checked.
+                # The executor still uses real ROS odometry as start_pose.
+                from pulse1_v6_route_handoff import reconcile_route_plan
+                raw = os.environ.get('PULSE1_V6_ROUTE_GZ_POSE', '')
+                try:
+                    route_pose = tuple(float(v) for v in raw.split(','))
+                    snap_time = float(os.environ.get(
+                        'PULSE1_V6_ROUTE_GZ_TIME', 'nan'))
+                except (ValueError, TypeError):
+                    raise RuntimeError('ROUTE_SNAPSHOT_INVALID')
+                snap_age = time.monotonic() - snap_time
+                if not (len(route_pose) == 3
+                        and all(math.isfinite(v) for v in route_pose)
+                        and math.isfinite(snap_age)
+                        and 0 <= snap_age <= 60):
+                    raise RuntimeError('ROUTE_SNAPSHOT_STALE_OR_INVALID')
+                if not check():
+                    raise RuntimeError('ROUTE_SNAPSHOT_SAFETY_CHANGED')
+                request, physical_plan, handoff_mode = reconcile_route_plan(
+                    load_world(WORLD), route_pose, origin, next_id, side
                 )
+                print('ROUTE HANDOFF:', handoff_mode,
+                      'kind=', request['kind'],
+                      'waypoint=', request['waypoint_index'],
+                      'limit=', round(request['limit'], 6), flush=True)
+
+            # BEGIN_ROUTE_PLAN_LOCK
+            expected_kind = os.environ.get("PULSE1_V6_EXPECT_KIND")
+            expected_wp = os.environ.get("PULSE1_V6_EXPECT_WP")
+            expected_limit = os.environ.get("PULSE1_V6_EXPECT_LIMIT")
+
+            if any(v is not None for v in (
+                expected_kind, expected_wp, expected_limit
+            )):
+                if (expected_kind not in ("ADVANCE", "TURN")
+                        or expected_wp is None
+                        or expected_limit is None):
+                    raise RuntimeError("PLAN_LOCK_INCOMPLETE")
+
+                try:
+                    wp = int(expected_wp)
+                    ceiling = float(expected_limit)
+                except (ValueError, TypeError):
+                    raise RuntimeError("PLAN_LOCK_INVALID")
+
+                if not math.isfinite(ceiling) or ceiling <= 0:
+                    raise RuntimeError("PLAN_LOCK_INVALID")
+
+                if os.environ.get("PULSE1_V6_PRECISION_WP0") == "YES":
+                    # Preserve the original independent WP0 precision lock.
+                    planned = request
+                    handoff_mode = 'PRECISION_WP0'
+                else:
+                    planned = physical_plan
+
+                # The original physical Gazebo plan MUST match the plan
+                # chosen before rearm, even in a corner transition.
+                if (planned.get("kind") != expected_kind
+                        or planned.get("waypoint_index") != wp):
+                    raise RuntimeError("PLAN_EXECUTOR_DIVERGED")
+                planned_limit = planned.get("limit")
+                if (type(planned_limit) not in (int, float)
+                        or not math.isfinite(planned_limit)
+                        or not 0 < planned_limit <= ceiling + 1e-6):
+                    raise RuntimeError("PLAN_LIMIT_EXCEEDED")
+
+                actual_limit = request.get("limit")
+                if (type(actual_limit) not in (int, float)
+                        or not math.isfinite(actual_limit)
+                        or actual_limit <= 0):
+                    raise RuntimeError("PLAN_LIMIT_INVALID")
+                if (request.get("kind") == expected_kind
+                        and request.get("waypoint_index") == wp):
+                    if actual_limit > ceiling + 1e-6:
+                        raise RuntimeError("PLAN_LIMIT_EXCEEDED")
+                elif not (handoff_mode == 'CORNER_BRIDGE'
+                          and expected_kind == 'TURN'
+                          and request.get('kind') == 'ADVANCE'
+                          and request.get('waypoint_index') == wp - 1):
+                    # Only an independently verified, short advance on the
+                    # previous leg may replace a signed TURN at a corner.
+                    raise RuntimeError("PLAN_EXECUTOR_DIVERGED")
+            # END_ROUTE_PLAN_LOCK
+
+        elif abort_mode or pending_mode:
+            # Only a NEW clean safety session. ABORT and pre-motion rearm
+            # have different evidence; never restore nominal STOP or publish
+            # a rearm request on either route.
+            import secrets
+            from pulse1_v6_abort_resume_policy import verify_bootstrap
+            from pulse1_v6_route_handoff import reconcile_route_plan
+            from pulse1_v6_sequencer import (
+                gazebo_pose, v6_corner_planning_pose,
+            )
+            if abort_mode and os.environ.get('PULSE1_V6_ABORT_BOOTSTRAP_OPERATOR') != 'YES':
+                raise RuntimeError('COLD_ROUTE_OPERATOR_CONSENT_MISSING')
+            if any(os.environ.get(k) == 'YES' for k in (
+                    'PULSE1_V6_ROUTE_NEXT', 'PULSE1_V6_TURN',
+                    'PULSE1_V6_RESUME_FIRST_LEG', 'PULSE1_V6_PRECISION_WP0')):
+                raise RuntimeError('COLD_ROUTE_MODE_CONFLICT')
+            if pending_mode:
+                audit = pending_audit  # Previously verified before physics.
+            else:
+                audit_file = os.environ.get('PULSE1_V6_ABORT_AUDIT', '')
+                if not audit_file:
+                    raise RuntimeError('COLD_ROUTE_AUDIT_REQUIRED')
+                audit_path = Path(audit_file).resolve()
+                if not audit_path.is_file() or ROOT not in audit_path.parents:
+                    raise RuntimeError('COLD_ROUTE_AUDIT_PATH_DENIED')
+                try:
+                    audit = json.loads(audit_path.read_text())
+                except (OSError, ValueError) as exc:
+                    raise RuntimeError('COLD_ROUTE_AUDIT_READ_FAILED') from exc
+            if not check():
+                raise RuntimeError('COLD_ROUTE_PREFLIGHT_CHANGED')
+            actual_gz = (gazebo_pose_from_topic() if pending_mode
+                         else gazebo_pose())
+            # gazebo_pose() runs a blocking external command. During that
+            # time this ROS node cannot spin, so its cached WorldStatistics
+            # and safety telemetry can become stale even while Gazebo is
+            # healthy and PAUSED. Refresh callbacks; never relax freshness.
+            pose_returned_at = time.monotonic()
+            runner.until(
+                lambda: (
+                    runner.seen.get('stats', 0.0) >= pose_returned_at
+                    and all(
+                        runner.age(k) is not None and runner.age(k) < age
+                        for k, age in (
+                            ('stats', .5), ('guard', .5),
+                            ('watchdog', .5), ('supervisor', .7),
+                            ('cmd', .5),
+                        )
+                    )
+                ), 5.0, 'COLD_ROUTE_POST_GAZEBO_TELEMETRY'
+            )
+            if not check():
+                raise RuntimeError('COLD_ROUTE_POST_GAZEBO_PREFLIGHT_CHANGED')
+            g = runner.val.get('guard') or {}
+            f = runner.val.get('watchdog') or {}
+            sup = runner.val.get('supervisor') or {}
+            if pending_mode:
+                # Independently reject any physical drift during warmup.
+                from pulse1_v6_abort_resume_policy import verify_stationary_odom
+                verify_stationary_odom(pending_pre_pose, actual_gz)
+                verify_pending_bootstrap(
+                    audit, g, f, sup, runner.stats()[1],
+                    runner.val.get('cmd'), actual_gz,
+                )
+            else:
+                verify_bootstrap(audit,g,f,sup,runner.stats()[1],
+                                 runner.val.get('cmd'),actual_gz)
+            world = load_world(WORLD)
+            virtual_gz = v6_corner_planning_pose(actual_gz,world,'LEFT')
+            next_id='v6-new-session-' + secrets.token_hex(8)
+            request, physical_plan, mode = reconcile_route_plan(
+                world, virtual_gz, origin, next_id, 'LEFT')
+            if not check():
+                raise RuntimeError('COLD_ROUTE_SAFETY_CHANGED')
+            print('COLD ROUTE BOOTSTRAP:', mode,
+                  'kind=',request['kind'],
+                  'WP=',request['waypoint_index'],
+                  'limit=',round(request['limit'],6),flush=True)
+            # Gazebo pose acquisition is a BLOCKING subprocess. A fresh ROS
+            # heartbeat is not a fresh sensor measurement in PAUSED Gazebo.
+            # No request has been published: refresh actual lidar/odom/IMU
+            # under the unchanged BLOCKED Guard and clean Geofence, using the
+            # existing fail-closed ControlWorld warmup protocol.
+            if runner.req is not None or not check():
+                raise RuntimeError('BOOTSTRAP_POST_POSE_PREFLIGHT_CHANGED')
+            observer_before = runner.seen.get('observer', 0.0)
+            pre_refresh_odom = origin
+            dt, _ = runner.physics(250, warmup=True)
+            if not check():
+                raise RuntimeError('BOOTSTRAP_POST_POSE_SAFETY_CHANGED')
+            post_refresh_odom = runner.val.get('pose')
+            if not (pose_valid(post_refresh_odom)
+                    and runner.age('pose') is not None
+                    and runner.age('pose') < .5
+                    and runner.seen.get('observer', 0.0) > observer_before
+                    and runner.age('observer') is not None
+                    and runner.age('observer') < .5):
+                raise RuntimeError('BOOTSTRAP_POST_POSE_SENSOR_REFRESH_MISSING')
+            from pulse1_v6_abort_resume_policy import verify_stationary_odom
+            verify_stationary_odom(pre_refresh_odom, post_refresh_odom)
+            # Reconcile once more against the NEW odometry after the PAUSED
+            # sensor refresh, never reusing a stale start_pose.
+            origin = post_refresh_odom
+            refreshed, refreshed_physical, refreshed_mode = reconcile_route_plan(
+                world, virtual_gz, origin, next_id, 'LEFT')
+            if (refreshed.get('kind') != request.get('kind')
+                    or refreshed.get('waypoint_index') != request.get('waypoint_index')
+                    or refreshed.get('direction') != request.get('direction')):
+                raise RuntimeError('BOOTSTRAP_POST_REFRESH_PLAN_CHANGED')
+            request, physical_plan, mode = (
+                refreshed, refreshed_physical, refreshed_mode)
+            print('BOOTSTRAP SENSOR REFRESH: physics=250 '
+                  'stationary=VERIFIED', flush=True)
+            # Independent Geofence checks the request, live lidar and odom.
+            # No synthetic COMPLETE or nominal latch is ever produced.
 
         elif os.environ.get('PULSE1_V6_TURN') == 'YES':
             if os.environ.get('PULSE1_V6_RESUME_FIRST_LEG') == 'YES':
@@ -590,6 +880,23 @@ def execute():
             )
         else:
             request=first_request(load_world(WORLD),origin)
+
+        # Revalidate exact request-specific clearance AFTER warmup and
+        # BEFORE publishing it. Geofence must still authorize independently.
+        sensor_ok, sensor_reason = check_sensor_gate(
+            runner.val.get('observer'), runner.age('observer'), request['kind']
+        )
+        if not sensor_ok:
+            obs = runner.val.get('observer') or {}
+            print('SENSOR DENIAL DETAILS:',
+                  'state=', obs.get('state'),
+                  'flags=', {k: obs.get(k) for k in (
+                      'odom_ok', 'lidar_ok', 'rear_lidar_ok', 'imu_ok')},
+                  'ages=', obs.get('ages_s'),
+                  'observer_ros_age=', runner.age('observer'), flush=True)
+            raise RuntimeError('SENSOR_START_DENIED:' + sensor_reason)
+        print('SENSOR START VERIFIED:', request['kind'], sensor_reason,
+              flush=True)
 
         gate=V6SegmentGate()
         pre_stats=runner.stats()

@@ -10,6 +10,7 @@ import json
 import math
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import rclpy
@@ -27,6 +28,7 @@ from pulse1_v6_safety_contract import (
 )
 from pulse1_v6_ros_safety_policy import watchdog_lease, motor_guard_status, nominal_v6_stop
 from pulse1_v6_rearm_policy import verify_rearm
+from pulse1_v6_clearance_abort_diagnostic import clearance_abort_snapshot
 
 ROOT = Path(__file__).resolve().parent.parent
 CMD_TOPIC = '/model/pulse1_proto/cmd_vel'
@@ -242,6 +244,7 @@ class V6Geofence(Inputs, EmergencyPauser):
         super().__init__('pulse1_v6_geofence_watchdog')
         self.armed = armed
         self.core = V6GeofenceSegment(strict_v6_guard=True)
+        self.clearance_abort_evidence = None  # latched; not recomputed after Gazebo pauses
         self.pending_rearm = None
         self.rearm_previous_id = None
         self.setup_pause()
@@ -351,11 +354,28 @@ class V6Geofence(Inputs, EmergencyPauser):
             kw['request'] = None
             kw['request_age_s'] = None
         self.process_rearm(kw)
+        previous_phase = self.core.phase
         result = self.core.tick(**kw)
+        first_clearance_abort = (
+            self.clearance_abort_evidence is None
+            and previous_phase == 'MONITOR'
+            and result['action'] == 'PAUSE'
+            and result['reason'] == 'OBSTACLE_CLEARANCE_LOST'
+        )
+        clearance_result = result if first_clearance_abort else None
         if self.pause_error:
             result = self.core._abort(self.pause_error)
         if self.armed and result['action'] in ('STOPPING', 'PAUSE'):
-            self.start_pause()
+            self.start_pause()  # CRITICAL: send PAUSE before any diagnostic I/O
+        # Snapshot the same inputs evaluated by the contract. Only a small
+        # bounded in-memory copy happens before publishing PAUSE status.
+        if first_clearance_abort:
+            self.clearance_abort_evidence = clearance_abort_snapshot(
+                result=clearance_result, observer=kw['observer'],
+                observer_age_s=kw['observer_age_s'],
+                pose=kw['pose'], now_s=now)
+            self.clearance_abort_evidence['recorded_utc'] = (
+                datetime.now(timezone.utc).isoformat())
         lease = watchdog_lease(
             result=result, arm_enabled=self.armed,
             request=kw['request'], request_age_s=kw['request_age_s'],
@@ -369,6 +389,8 @@ class V6Geofence(Inputs, EmergencyPauser):
                   'ready_for_motion': lease,
                   'pause_ack': self.pause_ack, 'pause_error': self.pause_error,
                   'motor_commands': False}
+        if self.clearance_abort_evidence is not None:
+            status['clearance_abort_diagnostic'] = self.clearance_abort_evidence
         status['rearm_previous_segment_id'] = self.rearm_previous_id
         status['rearm_next_segment_id'] = (
             self.core.expected_next_segment_id or None
@@ -376,6 +398,21 @@ class V6Geofence(Inputs, EmergencyPauser):
         msg = String()
         msg.data = json.dumps(status, allow_nan=False)
         self.publisher.publish(msg)
+        if first_clearance_abort:
+            # Saving to disk happens AFTER the PAUSE request and status publish.
+            # Disk errors never affect the latched Geofence abort.
+            try:
+                folder = ROOT / 'runtime' / 'evidence'
+                folder.mkdir(parents=True, exist_ok=True)
+                path = folder / f'v6_clearance_abort_{time.time_ns()}.json'
+                path.write_text(json.dumps(self.clearance_abort_evidence,
+                                           indent=2, allow_nan=False) + '\n')
+                self.clearance_abort_evidence['evidence_file'] = str(path)
+            except OSError as exc:
+                self.get_logger().error('CLEARANCE EVIDENCE WRITE FAILED: ' + str(exc))
+            self.get_logger().error('CLEARANCE ABORT SNAPSHOT: '
+                                    + json.dumps(self.clearance_abort_evidence,
+                                                 allow_nan=False))
 
 
 class V6MotorGuard(Inputs, EmergencyPauser):

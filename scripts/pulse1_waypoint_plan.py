@@ -87,6 +87,11 @@ def segment_hits_aabb(start, end, bounds):
     return True
 
 
+# Additional stand-off for the S1 first turning corner.
+# Keeps LiDAR TURN clearance unchanged.
+S1_WP0_EXTRA_SETBACK_M = 0.27
+
+
 def build_route(world, side):
     """Return a rectilinear *candidate* outside a conservative S1 keepout."""
     if side not in ('LEFT', 'RIGHT'):
@@ -94,7 +99,7 @@ def build_route(world, side):
     obs = s1_obstacle(world)
     envelope = turning_envelope()
     xmin, xmax, ymin, ymax = obs.bounds(envelope)
-    before_x = xmin - ROUTE_PADDING_M
+    before_x = xmin - ROUTE_PADDING_M - S1_WP0_EXTRA_SETBACK_M
     after_x = xmax + ROUTE_PADDING_M
     corridor_y = (ymax if side == 'LEFT' else ymin)
     corridor_y += ROUTE_PADDING_M if side == 'LEFT' else -ROUTE_PADDING_M

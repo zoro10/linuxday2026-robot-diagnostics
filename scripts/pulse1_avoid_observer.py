@@ -14,6 +14,9 @@ from sensor_msgs.msg import Imu, LaserScan
 from std_msgs.msg import String
 
 from pulse1_scan_logic import front_distance
+from pulse1_v6_no_return_proof import (
+    make_no_return_certificate, make_full_scan_rays,
+)
 from pulse1_avoid_sectors import sector_distances
 from pulse1_avoid_choice import choose_avoid_side
 
@@ -139,6 +142,17 @@ class AvoidObserver(Node):
             return
 
         self.readings[name] = {
+            # Complete calibrated scan. The independent V6 safety contract
+            # checks every finite beam against the full-turn swept disk.
+            # JSON null means valid +inf; invalid/incomplete scans yield None.
+            "full_scan_rays": make_full_scan_rays(
+                name, msg.ranges, msg.angle_min, msg.angle_increment,
+                msg.range_min, msg.range_max),
+            # Positive evidence from the ENTIRE raw scan, not sector minima.
+            # None means unproven, never an authorization on its own.
+            "full_scan_no_return": make_no_return_certificate(
+                name, msg.ranges, msg.angle_min, msg.angle_increment,
+                msg.range_min, msg.range_max),
             "distance_m": (
                 round(distance, 3)
                 if math.isfinite(distance)

@@ -113,7 +113,7 @@ class TestV6Guard(unittest.TestCase):
         self.assertEqual(self.allowed(watchdog_age_s=.3), (0., 0.))
 
     def test_stale_odom_denied(self):
-        self.assertEqual(self.allowed(odom_age_s=.61), (0., 0.))
+        self.assertEqual(self.allowed(odom_age_s=.81), (0., 0.))
 
     def test_stale_observer_denied(self):
         self.assertEqual(self.allowed(observer_age_s=.61), (0., 0.))

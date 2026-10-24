@@ -81,6 +81,73 @@ def evaluate(data, now=None):
     else:
         robot_status = 'FAIL'
 
+    # Never interpret paused-world STALE scans as a robot failure.
+    # Equally, never hide an independently reported V6 safety emergency.
+    safety = data.get('safety') or {}
+    sf = safety.get('fresh') or {}
+    guard = safety.get('guard') or {}
+    geofence = safety.get('geofence') or {}
+    supervisor = safety.get('supervisor') or {}
+    cmd = safety.get('cmd')
+
+    guard_fresh = sf.get('guard') is True
+    geofence_fresh = sf.get('geofence') is True
+    supervisor_fresh = sf.get('supervisor') is True
+    cmd_fresh = sf.get('cmd') is True
+    safety_current = all((guard_fresh, geofence_fresh,
+                          supervisor_fresh, cmd_fresh))
+    cmd_zero = (isinstance(cmd, (list, tuple)) and len(cmd) == 2
+                and all(type(v) in (int, float) and abs(v) < 1e-8
+                        for v in cmd))
+    simulation_paused = data.get('simulation', {}).get('state') == 'PAUSED'
+    safety_alerts = []
+    if guard_fresh and (guard.get('guard_state') == 'ABORT'
+                        or guard.get('emergency_latched') is True):
+        safety_alerts.append('Motor Guard: ABORT / arresto di emergenza')
+    if supervisor_fresh and supervisor.get('state') == 'EMERGENCY_PAUSE':
+        safety_alerts.append('Supervisor: EMERGENCY_PAUSE')
+    if geofence_fresh and geofence.get('action') == 'PAUSE':
+        safety_alerts.append('Geofence: PAUSE (' +
+                             str(geofence.get('reason', 'motivo ignoto')) + ')')
+
+    robot_detail = 'Sensori valutati su campioni freschi'
+    if safety_alerts:
+        robot_status = 'FAIL'
+        robot_score = None  # do not present stale sensor score during abort
+        robot_problems = safety_alerts + [
+            p for p in robot_problems if not p.startswith(robot_prefixes)
+        ]
+        robot_detail = 'Emergenza di sicurezza: STOP necessario'
+    elif simulation_paused:
+        stopped = (safety_current and cmd_zero
+                   and guard.get('guard_state') == 'BLOCKED'
+                   and guard.get('emergency_latched') is False
+                   and supervisor.get('state') == 'HEALTHY')
+        nominal = (stopped
+                   and guard.get('nominal_stop_latched') is True
+                   and geofence.get('action') == 'COMPLETE'
+                   and geofence.get('reason') == 'TARGET_REACHED'
+                   and isinstance(guard.get('segment_id'), str)
+                   and bool(guard.get('segment_id'))
+                   and guard.get('segment_id') == geofence.get('segment_id'))
+        initial = (stopped
+                   and guard.get('nominal_stop_latched') is False
+                   and geofence.get('action') == 'WAIT'
+                   and geofence.get('reason') == 'NOT_STARTED')
+        robot_score = None
+        if nominal:
+            robot_status = 'PAUSED'
+            robot_problems = []
+            robot_detail = 'Pausa con STOP nominale certificato'
+        elif initial:
+            robot_status = 'PAUSED'
+            robot_problems = []
+            robot_detail = 'Pausa iniziale, motori bloccati (nessuno STOP certificato)'
+        else:
+            robot_status = 'UNKNOWN'
+            robot_problems = ['Pausa non certificata: verificare Guard, Geofence e Supervisor']
+            robot_detail = 'Stato di sicurezza non completamente verificato'
+
     # Piattaforma: Linux 25, collector 25,
     # web 20, bridge 10, API 20.
     linux_points = parts['linux']['score']
@@ -110,6 +177,7 @@ def evaluate(data, now=None):
         'robot_health': {
             'score': robot_score,
             'status': robot_status,
+            'detail': robot_detail,
             'problems': robot_problems,
         },
         'platform_health': {

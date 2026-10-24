@@ -29,6 +29,15 @@ class Supervisor(Node):
         self.client = self.create_client(ControlWorld, '/world/empty/control')
         self.sub = self.create_subscription(String, '/pulse1/v6_motor_guard', self.on_guard, 10)
         self.pub = self.create_publisher(String, '/pulse1/v6_supervisor_status', 10)
+        # Startup-only discovery barrier. The current session may be restarted
+        # with Gazebo already PAUSED; do not arm a watchdog timer while this
+        # node cannot yet discover the independent emergency PAUSE service.
+        # A discovery failure is fail-closed: no HEALTHY heartbeat is published.
+        if self.armed and not self.client.wait_for_service(timeout_sec=8.0):
+            raise RuntimeError('SUPERVISOR_PAUSE_SERVICE_DISCOVERY_TIMEOUT')
+        # The existing 1.5 s Guard-discovery window begins only after PAUSE
+        # service discovery. Runtime 0.8 s watchdog and latched faults are intact.
+        self.started = time.monotonic()
         self.create_timer(.1, self.tick)
 
     def on_guard(self, m):

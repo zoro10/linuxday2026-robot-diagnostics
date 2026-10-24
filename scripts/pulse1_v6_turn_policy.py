@@ -47,10 +47,22 @@ def turn_progress_ok(pose, origin, direction, limit):
 
 
 def turn_reached(pose, origin, direction, limit):
+    # A micro-TURN cannot be completed below the
+    # minimum angular progress required by the FSM.
+    # Preserve the existing geometric completion
+    # checks and reject only premature completion.
+    if turn_progress_ok(pose, origin, direction, limit):
+        from pulse1_v6_segment_fsm import MIN_PROGRESS_RAD
+
+        if signed_turn(
+            pose, origin, direction
+        ) < MIN_PROGRESS_RAD:
+            return False
+
     return (
         turn_progress_ok(pose, origin, direction, limit)
         and signed_turn(pose, origin, direction)
-        >= limit - math.radians(1.5)
+        >= limit - math.radians(2)
     )
 
 

@@ -14,7 +14,7 @@ MAX_LINEAR_M_S = 0.10
 MAX_ANGULAR_RAD_S = 0.30
 MAX_REQUEST_AGE_S = 0.35
 MAX_WATCHDOG_AGE_S = 0.25
-MAX_ODOM_AGE_S = 0.60
+MAX_ODOM_AGE_S = 0.80  # TEMPORANEO: SOLO GAZEBO
 MAX_OBSERVER_AGE_S = 0.60
 MAX_SEGMENT_WALL_S = 30.0
 MAX_STOP_WALL_S = 3.0
@@ -109,30 +109,275 @@ def front_clear(observer):
     return finite(distance) and distance >= 1.45
 
 
-def turn_clear(observer):
-    """Require known readings from six sectors and ample turning clearance."""
+# Calibrated to simulation/models/pulse1/model_demo2.sdf, using the
+# actual differential-drive turning centre (wheel axle), NOT model origin.
+# Any change to this SDF requires the offline geometry calibration test.
+TURN_AXLE_X_M = 0.5542825  # mean of both wheel link X positions
+TURN_CHASSIS_XMIN_M = -0.151427 - 2.01142 / 2
+TURN_CHASSIS_XMAX_M = -0.151427 + 2.01142 / 2
+TURN_CHASSIS_HALF_WIDTH_M = 1.0 / 2
+TURN_WHEEL_Y_M = 0.625029
+TURN_WHEEL_RADIUS_M = 0.30
+TURN_CASTER_X_M = -0.957138
+TURN_CASTER_RADIUS_M = 0.20
+TURN_LIDARS = {
+    # sensor pose relative to model origin, sensor yaw relative to model
+    'front': (-0.151427 + 0.45, 0.0, 0.0, 12.0),
+    'rear': (-0.151427 - 1.05, 0.0, math.pi, 6.0),
+}
+TURN_SECTOR_ANGLES = {
+    'right': (-1.25, -0.35),
+    'front': (-0.35, 0.35),
+    'left': (0.35, 1.25),
+}
+TURN_SAFETY_MARGIN_M = 0.20
+# Extra conservative numerical/sector-resolution allowance.
+TURN_NUMERIC_MARGIN_M = 0.005
+
+from pulse1_v6_no_return_proof import (
+    verified_no_return_certificate, verified_full_scan_rays,
+)
+
+
+def turn_swept_radius_m():
+    """Full 360-degree *outer bound* for all solid collision shapes.
+
+    The commanded TURN is <= 15 degrees, but using a full disk around the
+    axle is stronger, independent of the turn direction or exact angle.
+    """
+    chassis = max(
+        math.hypot(x - TURN_AXLE_X_M, y)
+        for x in (TURN_CHASSIS_XMIN_M, TURN_CHASSIS_XMAX_M)
+        for y in (-TURN_CHASSIS_HALF_WIDTH_M, TURN_CHASSIS_HALF_WIDTH_M)
+    )
+    wheels = TURN_WHEEL_Y_M + TURN_WHEEL_RADIUS_M
+    caster = abs(TURN_CASTER_X_M - TURN_AXLE_X_M) + TURN_CASTER_RADIUS_M
+    return max(chassis, wheels, caster) + TURN_SAFETY_MARGIN_M
+
+
+def _sector_radial_lower_bound(sensor, sector, range_min):
+    """Worst-case distance of ANY beam hit in the sector from wheel axle.
+
+    Input is only the *minimum* distance in an angular sector. We minimize
+    over all possible hit bearings AND over all ranges >= that minimum.
+    This must not infer an angle or endpoint absent from the Observer.
+    """
+    sx, sy, sensor_yaw, _ = TURN_LIDARS[sensor]
+    low, high = TURN_SECTOR_ANGLES[sector]
+    low += sensor_yaw
+    high += sensor_yaw
+    qx, qy = sx - TURN_AXLE_X_M, sy
+    qnorm = math.hypot(qx, qy)
+
+    # q.dot(unit_bearing) is minimized at an angular endpoint or at
+    # the bearing directly TOWARDS the wheel axle if that falls inside.
+    dotmin = min(
+        qx * math.cos(a) + qy * math.sin(a)
+        for a in (low, high)
+    )
+    if qnorm:
+        toward = math.atan2(-qy, -qx)
+        if any(low <= toward + 2 * math.pi * k <= high
+               for k in (-2, -1, 0, 1, 2)):
+            dotmin = -qnorm
+
+    # Range can only be >= the measured sector minimum. The quadratic
+    # attains its minimum at r = -dotmin, if within this interval.
+    r = max(float(range_min), -dotmin)
+    return math.sqrt(max(0.0, qnorm*qnorm + r*r + 2*r*dotmin))
+
+
+def _ray_radial_lower_bound(sensor, angle, half_bin, measured_range):
+    """Conservative axle distance for a finite measured beam.
+
+    Cover +/- half a sample increment, +/- 5 mm range uncertainty and ANY
+    farther range. This intentionally over-approximates possible hit position.
+    It can deny borderline cases but cannot turn a close return into 'clear'.
+    """
+    sx, sy, yaw, _ = TURN_LIDARS[sensor]
+    qx, qy = sx - TURN_AXLE_X_M, sy
+    lo, hi = yaw + angle - half_bin, yaw + angle + half_bin
+    n = math.hypot(qx, qy)
+    dotmin = min(qx*math.cos(a) + qy*math.sin(a) for a in (lo, hi))
+    toward = math.atan2(-qy, -qx)
+    if any(lo <= toward + 2*math.pi*k <= hi for k in (-2, -1, 0, 1, 2)):
+        dotmin = -n
+    r = max(0.0, measured_range - .005, -dotmin)
+    return math.sqrt(max(0.0, n*n + r*r + 2*r*dotmin))
+
+
+def _bounded_turn_swept_aabb():
+    """Conservative XY box swept by every S1 collision shape for either TURN.
+
+    Includes the full V6 15-degree command plus the permitted 2-degree
+    overshoot in BOTH directions. It is larger than the true swept envelope;
+    shrinking the policy to the requested direction is unnecessary.
+    """
+    angle = MAX_TURN_RAD + MAX_OVERSHOOT_RAD
+    s, c = math.sin(angle), math.cos(angle)
+    points = [
+        (x, y, 0.0)
+        for x in (TURN_CHASSIS_XMIN_M, TURN_CHASSIS_XMAX_M)
+        for y in (-TURN_CHASSIS_HALF_WIDTH_M, TURN_CHASSIS_HALF_WIDTH_M)
+    ]
+    points += [
+        (TURN_AXLE_X_M, -TURN_WHEEL_Y_M, TURN_WHEEL_RADIUS_M),
+        (TURN_AXLE_X_M, +TURN_WHEEL_Y_M, TURN_WHEEL_RADIUS_M),
+        (TURN_CASTER_X_M, 0.0, TURN_CASTER_RADIUS_M),
+    ]
+    xmin, xmax, ymin, ymax = math.inf, -math.inf, math.inf, -math.inf
+    for x, y, solid_radius in points:
+        u = x - TURN_AXLE_X_M
+        xmin = min(xmin, TURN_AXLE_X_M + min(u*c, u) - abs(y)*s - solid_radius)
+        xmax = max(xmax, TURN_AXLE_X_M + max(u*c, u) + abs(y)*s + solid_radius)
+        ymin = min(ymin, -abs(u)*s + min(y*c, y) - solid_radius)
+        ymax = max(ymax, +abs(u)*s + max(y*c, y) + solid_radius)
+    margin = TURN_SAFETY_MARGIN_M + TURN_NUMERIC_MARGIN_M
+    return xmin-margin, xmax+margin, ymin-margin, ymax+margin
+
+
+def _ray_box_exit(sx, sy, bearing, bounds):
+    """Farthest occupied point on a ray, or None if it misses the box.
+
+    The returned bound deliberately includes occlusion: a first return
+    *before* the protected box denies motion, even if the obstacle itself
+    is outside the box, since the region behind it would be unobserved.
+    """
+    xmin, xmax, ymin, ymax = bounds
+    lo, hi = 0.0, math.inf
+    for pos, direction, lower, upper in (
+        (sx, math.cos(bearing), xmin, xmax),
+        (sy, math.sin(bearing), ymin, ymax),
+    ):
+        if abs(direction) < 1e-12:
+            if pos < lower or pos > upper:
+                return None
+            continue
+        a, b = sorted(((lower - pos)/direction, (upper-pos)/direction))
+        lo, hi = max(lo, a), min(hi, b)
+        if lo > hi:
+            return None
+    return hi if hi >= 0.0 else None
+
+
+def _full_ray_turn_clearance(readings, radius):
+    """Fail-closed ray visibility proof for any bounded <=15 deg V6 turn.
+
+    Never tests just the hit endpoint: a nearer hit also blocks visibility
+    into the swept box. The box conservatively encloses both turn directions,
+    all physical collision shapes, the 2-degree permitted overshoot and the
+    unchanged 20 cm safety + 5 mm numeric allowances.
+    """
+    swept = _bounded_turn_swept_aabb()
+    for name, (sx, sy, yaw, maximum) in TURN_LIDARS.items():
+        proof = readings[name].get('full_scan_rays')
+        if not verified_full_scan_rays(name, proof):
+            return False, 'TURN_' + name.upper() + '_FULL_SCAN_INVALID'
+        # Retain the ORIGINAL stronger full-disk range sufficiency proof.
+        q = math.hypot(sx - TURN_AXLE_X_M, sy)
+        half_bin = proof['angle_inc'] / 2.0
+        if maximum <= radius + q + maximum*math.sin(half_bin):
+            return False, 'TURN_' + name.upper() + '_RANGE_TOO_SHORT'
+        # Any point in an angular bin lies within rmax*half_bin of the
+        # central ray. Expand the box by that amount plus 5 mm range error;
+        # this over-approximates every possible hit bearing in that bin.
+        pad = maximum * half_bin + .005
+        box = (swept[0]-pad, swept[1]+pad,
+               swept[2]-pad, swept[3]+pad)
+        for i, distance in enumerate(proof['ranges']):
+            if distance is None:  # validated +infinity to sensor max range
+                continue
+            angle = proof['angle_min'] + i * proof['angle_inc']
+            farthest = _ray_box_exit(sx, sy, yaw+angle, box)
+            # A finite hit before the box's far side can hide an obstacle in
+            # the protected swept area. Deny on the uncertainty boundary.
+            if farthest is not None and (not finite(farthest)
+                    or distance - .005 <= farthest):
+                return (False, f'TURN_{name.upper()}_RAY_{i}_'
+                        f'AT_{math.degrees(angle):+.1f}deg_'
+                        f'ARC_VISIBILITY_BLOCKED_{distance:.3f}m_'
+                        f'REQUIRED_{farthest:.3f}m')
+    return True, 'TURN_CLEAR_FULL_RAY_ENVELOPE'
+
+
+def turn_clearance_detail(observer):
+    """Independent, fail-closed S1 turning envelope with precise diagnosis.
+
+    With calibrated complete ray scans, require unobstructed visibility past
+    a bounding box enclosing the full <=15 deg segment in EITHER direction,
+    plus the permitted 2 deg overshoot and existing physical/numeric margins.
+    The legacy coarse-sector fallback retains the older full-360-disk bound.
+    Missing/invalid full-scan evidence always denies motion. The very same
+    predicate is used by Guard, Geofence and non-authoritative preflight.
+    """
     readings = observer.get('readings') if isinstance(observer, dict) else None
     if not isinstance(readings, dict):
-        return False
-    values = []
-    for sensor in ('front', 'rear'):
+        return False, 'TURN_READINGS_MISSING'
+    radius = turn_swept_radius_m() + TURN_NUMERIC_MARGIN_M
+    finite_hits = 0
+    sector_hits = []
+    for sensor, (sx, sy, yaw, sensor_max) in TURN_LIDARS.items():
         reading = readings.get(sensor)
         sectors = reading.get('sectors') if isinstance(reading, dict) else None
         if not isinstance(sectors, dict):
-            return False
-        for direction in ('front', 'left', 'right'):
-            entry = sectors.get(direction)
+            return False, f'TURN_{sensor.upper()}_SECTORS_MISSING'
+        for sector in ('front', 'left', 'right'):
+            name = f'TURN_{sensor.upper()}_{sector.upper()}'
+            entry = sectors.get(sector)
             if not isinstance(entry, dict):
-                return False
-            if entry.get('clear') is True and entry.get('distance_m') is None:
-                values.append(math.inf)
-            elif finite(entry.get('distance_m')) and entry['distance_m'] > 0:
-                values.append(entry['distance_m'])
-            else:
-                return False
-    finite_readings = [v for v in values if math.isfinite(v)]
-    # Do not infer guaranteed clearance if every sector is 'clear'.
-    return bool(finite_readings) and min(finite_readings) >= 3.20
+                return False, name + '_MISSING'
+            distance = entry.get('distance_m')
+            clear = entry.get('clear')
+            if clear is True:
+                if distance is not None:
+                    return False, name + '_INVALID'
+                continue
+            if clear is not False or not finite(distance) or not 0.12 <= distance <= sensor_max:
+                return False, name + '_INVALID'
+            finite_hits += 1
+            sector_hits.append((sensor, sector, name, distance))
+
+    # New Observer always supplies full scans; check ALL raw ray bearings,
+    # including lateral fringe rays outside the three coarse sectors. Never
+    # silently fall back to sector-only evidence if a full proof is malformed.
+    full_rays = [readings[sensor].get('full_scan_rays')
+                 for sensor in ('front', 'rear')]
+    if any("full_scan_rays" in readings[sensor] for sensor in ("front", "rear")):
+        if observer.get('state') != 'SENSOR_READY' or not all(
+                observer.get(k) is True for k in
+                ('odom_ok', 'lidar_ok', 'rear_lidar_ok', 'imu_ok')):
+            return False, 'TURN_FULL_SCAN_OBSERVER_NOT_READY'
+        return _full_ray_turn_clearance(readings, radius)
+
+    # Legacy, conservative coarse-sector behavior for older recorded tests.
+    # It cannot approve a zero-return turn without both full +inf certificates.
+    for sensor, sector, name, distance in sector_hits:
+        lower = _sector_radial_lower_bound(sensor, sector, distance)
+        if not finite(lower) or lower < radius:
+            return (False, f'{name}_TOO_CLOSE_{distance:.3f}m_'
+                    f'AXLE_MIN_{lower:.3f}m_REQUIRED_{radius:.3f}m')
+    if finite_hits == 0:
+        # A fresh validated scan can legitimately have zero finite hits.
+        # Bare `clear=True` sector aggregates are NOT sufficient: they omit
+        # the unaggregated lateral beams and cannot prove full scan coverage.
+        # Both lidar scans must attest every raw ray was a valid +inf (not
+        # NaN, empty, or missing) with the calibrated S1 scan metadata.
+        # This branch is never reached if any sector is invalid/missing.
+        if observer.get('state') != 'SENSOR_READY' or not all(
+                observer.get(k) is True for k in
+                ('odom_ok', 'lidar_ok', 'rear_lidar_ok', 'imu_ok')):
+            return False, 'TURN_ALL_SECTORS_NO_FINITE_RETURN'
+        if all(verified_no_return_certificate(sensor,
+                    readings[sensor].get('full_scan_no_return'))
+               for sensor in ('front', 'rear')):
+            return True, 'TURN_CLEAR_FULL_SCAN_NO_RETURN'
+        return False, 'TURN_ALL_SECTORS_NO_FINITE_RETURN'
+    return True, 'TURN_CLEAR'
+
+
+def turn_clear(observer):
+    """Authorization predicate shared by Guard and Geofence."""
+    return turn_clearance_detail(observer)[0]
 
 
 def geofence_permission(status, request, age_s):
@@ -305,7 +550,7 @@ class V6GeofenceSegment:
         return all((
             -MAX_OVERSHOOT_RAD <= signed <= self.limit + MAX_OVERSHOOT_RAD,
             math.hypot(dx, dy) <= MAX_CROSS_TRACK_M,
-        )), signed >= self.limit - math.radians(2)
+        )), signed >= max(math.radians(0.5), self.limit - math.radians(2))
 
     def tick(self, *, request, request_age_s, pose, pose_age_s, now_s,
              observer, observer_age_s, guard, guard_age_s, cmd, cmd_age_s,

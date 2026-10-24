@@ -13,6 +13,8 @@ from rclpy.qos import qos_profile_sensor_data
 
 from nav_msgs.msg import Odometry
 from sensor_msgs.msg import Imu, LaserScan
+from std_msgs.msg import String
+from geometry_msgs.msg import Twist
 from ros_gz_interfaces.msg import WorldStatistics
 from pulse1_linux_metrics import LinuxMetrics
 from pulse1_health_score import evaluate
@@ -49,6 +51,9 @@ class Pulse1Collector(Node):
         self.web_state = {'status': 'NOT_CHECKED'}
         self.sim_stats_at = None
         self.sim_paused = None
+        # Read-only V6 safety telemetry. No command publishers or rearm paths.
+        self.safety_values = {}
+        self.safety_seen = {}
 
         self.create_subscription(
             Odometry, '/model/pulse1_proto/odometry',
@@ -70,12 +75,41 @@ class Pulse1Collector(Node):
             qos_profile_sensor_data
         )
 
+        for key, topic in (
+            ('guard', '/pulse1/v6_motor_guard'),
+            ('geofence', '/pulse1/v6_geofence_watchdog'),
+            ('supervisor', '/pulse1/v6_supervisor_status'),
+        ):
+            self.create_subscription(
+                String, topic,
+                lambda msg, name=key: self.on_safety(name, msg), 10
+            )
+        self.create_subscription(
+            Twist, '/model/pulse1_proto/cmd_vel',
+            self.on_cmd, 10
+        )
+
         self.create_timer(1.0, self.write_status)
         self.get_logger().info('PULSE-1 collector avviato')
 
     def on_world_stats(self, msg):
         self.sim_paused = bool(msg.paused)
         self.sim_stats_at = time.monotonic()
+
+    def on_safety(self, name, msg):
+        try:
+            value = json.loads(msg.data)
+        except (TypeError, ValueError):
+            return
+        if isinstance(value, dict):
+            self.safety_values[name] = value
+            self.safety_seen[name] = time.monotonic()
+
+    def on_cmd(self, msg):
+        values = (msg.linear.x, msg.angular.z)
+        if all(math.isfinite(v) for v in values):
+            self.safety_values['cmd'] = list(values)
+            self.safety_seen['cmd'] = time.monotonic()
 
     def mark(self, name):
         now = time.monotonic()
@@ -165,12 +199,17 @@ class Pulse1Collector(Node):
             else None
         )
 
-        expected_controller = 'pulse1_motor_guard_live'
+        v6_nodes = ("pulse1_v6_motor_guard", "pulse1_v6_geofence_watchdog", "pulse1_v6_supervisor")
+        v6_active = any(name in discovered for name in v6_nodes)
+        expected_controller = "pulse1_v6_motor_guard" if v6_active else "pulse1_motor_guard_live"
 
         nodes = {
             'pulse1_bridge': 'pulse1_bridge' in discovered,
             expected_controller: expected_controller in discovered
         }
+
+        if v6_active:
+            nodes.update({name: name in discovered for name in v6_nodes})
 
         healthy = (
             all(item['status'] == 'OK' for item in result.values())
@@ -183,6 +222,18 @@ class Pulse1Collector(Node):
             status = 'STARTING'
         else:
             status = 'DEGRADED'
+
+        # Safety status must be fresh independently of collector heartbeat.
+        safety_fresh = {
+            key: (key in self.safety_seen
+                  and 0 <= now - self.safety_seen[key] <= 2.0)
+            for key in ('guard', 'geofence', 'supervisor', 'cmd')
+        }
+        safety = {
+            'fresh': safety_fresh,
+            **{key: self.safety_values.get(key)
+               for key in ('guard', 'geofence', 'supervisor', 'cmd')},
+        }
 
         payload = {
             "linux": self.linux_metrics.collect(),
@@ -200,6 +251,7 @@ class Pulse1Collector(Node):
                 )
             },
             'topics': result,
+            'safety': safety,
             'position': self.position,
             'lidar_front_distance_m': self.front_distance
         }
